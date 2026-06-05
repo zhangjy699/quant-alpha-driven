@@ -14,11 +14,11 @@ class SplitConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    train_start: date = date(2011, 1, 1)
-    train_end: date = date(2019, 12, 31)
-    valid_start: date = date(2020, 1, 1)
-    valid_end: date = date(2020, 12, 31)
-    test_start: date = date(2021, 1, 1)
+    train_start: date = date(2018, 1, 1)
+    train_end: date = date(2021, 12, 31)
+    valid_start: date = date(2022, 1, 1)
+    valid_end: date = date(2022, 12, 31)
+    test_start: date = date(2023, 1, 1)
     test_end: date = date(2024, 12, 1)
 
 

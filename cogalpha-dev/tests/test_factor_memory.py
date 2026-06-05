@@ -4,6 +4,7 @@ from cogalpha.factor_memory import (
     FactorMemoryCompactionResult,
     build_prior_lessons,
     update_factor_memory,
+    update_factor_memory_from_validation_audit,
 )
 
 
@@ -191,6 +192,16 @@ def test_factor_memory_uses_valid_llm_summarizer_output(tmp_path):
                     "evidence_factor_ids": [0, 999],
                 }
             ],
+            "regime_hypotheses": [
+                {
+                    "hypothesis": (
+                        "Validation evidence weakly favors normalized range mechanisms."
+                    ),
+                    "confidence": "low",
+                    "evidence_factor_ids": [0, 999],
+                    "risk": "May overfit one validation window.",
+                }
+            ],
         }
     )
 
@@ -215,6 +226,14 @@ def test_factor_memory_uses_valid_llm_summarizer_output(tmp_path):
         {
             "lesson": "Avoid raw range amplitude without normalization.",
             "evidence_factor_ids": [0],
+        }
+    ]
+    assert memory["regime_hypotheses"] == [
+        {
+            "hypothesis": "Validation evidence weakly favors normalized range mechanisms.",
+            "confidence": "low",
+            "evidence_factor_ids": [0],
+            "risk": "May overfit one validation window.",
         }
     ]
 
@@ -252,6 +271,245 @@ def test_factor_memory_falls_back_when_llm_summarizer_fails(tmp_path):
         (memory_root / "domain_memory/alpha-market-cycle.json").read_text(encoding="utf-8")
     )
     assert "factor_raw_trend was rejected" in memory["failure_patterns"][0]["lesson"]
+
+
+def test_factor_memory_ingests_validation_audit_success_and_failure(tmp_path):
+    memory_root = tmp_path / "outputs" / "factor_memory"
+    audit_path = tmp_path / "outputs" / "experiments" / "run-1" / (
+        "validation_audit_valid.json"
+    )
+    _write_validation_audit(
+        audit_path,
+        [
+            _validation_record(
+                factor_id=1,
+                domain_agent="alpha-range-vol",
+                factor_name="factor_range_ratio",
+                outcome="validation_success",
+            ),
+            _validation_record(
+                factor_id=2,
+                domain_agent="alpha-range-vol",
+                factor_name="factor_range_noise",
+                outcome="validation_failure",
+                bottlenecks=["rank_ic", "rank_icir"],
+            ),
+        ],
+    )
+
+    result = update_factor_memory_from_validation_audit(
+        audit_path=audit_path,
+        memory_root=memory_root,
+    )
+
+    assert result.processed_audit_keys == ["run-1:valid:1", "run-1:valid:2"]
+    assert result.domain_updates == {"alpha-range-vol": 2}
+    memory = json.loads(
+        (memory_root / "domain_memory/alpha-range-vol.json").read_text(encoding="utf-8")
+    )
+    assert memory["validation_counts"] == {
+        "validation_error": 0,
+        "validation_failure": 1,
+        "validation_success": 1,
+    }
+    assert memory["validation_metric_bottlenecks"] == {
+        "rank_ic": 1,
+        "rank_icir": 1,
+    }
+    assert "passed valid validation minima" in memory["success_patterns"][0]["lesson"]
+    assert "failed valid validation minima" in memory["failure_patterns"][0]["lesson"]
+    assert "out-of-sample valid robustness" in memory["avoid_patterns"][0]["lesson"]
+
+    cache = (memory_root / "retrieval_cache/alpha-range-vol.md").read_text(
+        encoding="utf-8"
+    )
+    assert "factor_range_ratio passed valid validation minima" in cache
+    assert "factor_range_noise qualified in the source run" in cache
+
+
+def test_factor_memory_validation_audit_can_use_summarizer_for_regime_hypothesis(
+    tmp_path,
+):
+    memory_root = tmp_path / "outputs" / "factor_memory"
+    audit_path = tmp_path / "outputs" / "experiments" / "run-1" / (
+        "validation_audit_valid.json"
+    )
+    _write_validation_audit(
+        audit_path,
+        [
+            _validation_record(
+                factor_id=1,
+                domain_agent="alpha-range-vol",
+                factor_name="factor_range_ratio",
+                outcome="validation_success",
+            ),
+            _validation_record(
+                factor_id=2,
+                domain_agent="alpha-range-vol",
+                factor_name="factor_range_noise",
+                outcome="validation_failure",
+                bottlenecks=["rank_icir"],
+            ),
+        ],
+    )
+    summarizer = FakeSummarizer(
+        {
+            "success_patterns": [
+                {
+                    "lesson": "Range normalization generalized better than raw range.",
+                    "evidence_factor_ids": [1],
+                }
+            ],
+            "failure_patterns": [],
+            "avoid_patterns": [],
+            "regime_hypotheses": [
+                {
+                    "hypothesis": (
+                        "Recent validation evidence weakly favors normalized "
+                        "range-volatility mechanisms."
+                    ),
+                    "confidence": "medium",
+                    "evidence_factor_ids": [1, 2, 999],
+                    "risk": "Could overfit the validation window.",
+                }
+            ],
+        }
+    )
+
+    update_factor_memory_from_validation_audit(
+        audit_path=audit_path,
+        memory_root=memory_root,
+        summarizer=summarizer,
+    )
+
+    memory = json.loads(
+        (memory_root / "domain_memory/alpha-range-vol.json").read_text(encoding="utf-8")
+    )
+    assert summarizer.requests[0].new_evidence[0].validation_outcome == (
+        "validation_success"
+    )
+    assert memory["regime_hypotheses"] == [
+        {
+            "hypothesis": (
+                "Recent validation evidence weakly favors normalized "
+                "range-volatility mechanisms."
+            ),
+            "confidence": "medium",
+            "evidence_factor_ids": [1, 2],
+            "risk": "Could overfit the validation window.",
+        }
+    ]
+    cache = (memory_root / "retrieval_cache/alpha-range-vol.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Regime Hypotheses" in cache
+    assert "Use as inspiration only; keep mechanisms diverse." in cache
+
+
+def test_factor_memory_keeps_static_validation_lessons_when_summarizer_fails(
+    tmp_path,
+):
+    memory_root = tmp_path / "outputs" / "factor_memory"
+    audit_path = tmp_path / "outputs" / "experiments" / "run-1" / (
+        "validation_audit_valid.json"
+    )
+    _write_validation_audit(
+        audit_path,
+        [
+            _validation_record(
+                factor_id=1,
+                domain_agent="alpha-range-vol",
+                factor_name="factor_range_ratio",
+                outcome="validation_success",
+            ),
+            _validation_record(
+                factor_id=2,
+                domain_agent="alpha-range-vol",
+                factor_name="factor_range_noise",
+                outcome="validation_failure",
+                bottlenecks=["rank_icir"],
+            ),
+        ],
+    )
+
+    update_factor_memory_from_validation_audit(
+        audit_path=audit_path,
+        memory_root=memory_root,
+        summarizer=FakeSummarizer(error=RuntimeError("llm unavailable")),
+    )
+
+    memory = json.loads(
+        (memory_root / "domain_memory/alpha-range-vol.json").read_text(encoding="utf-8")
+    )
+    assert "passed valid validation minima" in memory["success_patterns"][0]["lesson"]
+    assert "failed valid validation minima" in memory["failure_patterns"][0]["lesson"]
+    assert "out-of-sample valid robustness" in memory["avoid_patterns"][0]["lesson"]
+    assert memory["regime_hypotheses"] == []
+
+
+def test_factor_memory_validation_audit_ingestion_is_idempotent(tmp_path):
+    memory_root = tmp_path / "outputs" / "factor_memory"
+    audit_path = tmp_path / "outputs" / "experiments" / "run-1" / (
+        "validation_audit_valid.json"
+    )
+    _write_validation_audit(
+        audit_path,
+        [
+            _validation_record(
+                factor_id=1,
+                domain_agent="alpha-market-cycle",
+                factor_name="factor_cycle",
+                outcome="validation_success",
+            )
+        ],
+    )
+
+    update_factor_memory_from_validation_audit(
+        audit_path=audit_path,
+        memory_root=memory_root,
+    )
+    second = update_factor_memory_from_validation_audit(
+        audit_path=audit_path,
+        memory_root=memory_root,
+    )
+
+    assert second.processed_audit_keys == []
+    memory = json.loads(
+        (memory_root / "domain_memory/alpha-market-cycle.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert memory["validation_counts"]["validation_success"] == 1
+    assert len(memory["success_patterns"]) == 1
+
+
+def test_factor_memory_rejects_test_audit_ingestion(tmp_path):
+    memory_root = tmp_path / "outputs" / "factor_memory"
+    audit_path = tmp_path / "outputs" / "experiments" / "run-1" / (
+        "validation_audit_test.json"
+    )
+    _write_validation_audit(
+        audit_path,
+        [
+            _validation_record(
+                factor_id=1,
+                domain_agent="alpha-market-cycle",
+                factor_name="factor_cycle",
+                outcome="validation_success",
+            )
+        ],
+        split="test",
+    )
+
+    try:
+        update_factor_memory_from_validation_audit(
+            audit_path=audit_path,
+            memory_root=memory_root,
+        )
+    except ValueError as exc:
+        assert "Test split" in str(exc)
+    else:
+        raise AssertionError("Expected test audit ingestion failure.")
 
 
 def _write_index(factor_pool, factors):
@@ -305,3 +563,65 @@ def _write_factor(
         ),
         encoding="utf-8",
     )
+
+
+def _write_validation_audit(path, records, *, split="valid"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "run_id": "run-1",
+                "split": split,
+                "data_version": "test-data",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "validation_rule": "qualified_minima",
+                "thresholds": {
+                    "ic": 0.005,
+                    "rank_ic": 0.005,
+                    "icir": 0.05,
+                    "rank_icir": 0.05,
+                    "mi": 0.02,
+                },
+                "records": records,
+                "counts": {"total": len(records)},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _validation_record(
+    *,
+    factor_id,
+    domain_agent,
+    factor_name,
+    outcome,
+    bottlenecks=None,
+):
+    return {
+        "factor_id": factor_id,
+        "candidate_id": f"candidate-{factor_id}",
+        "domain_agent": domain_agent,
+        "pool": "qualified",
+        "factor_name": factor_name,
+        "train_metrics": {
+            "ic": 0.02,
+            "rank_ic": 0.02,
+            "icir": 0.2,
+            "rank_icir": 0.2,
+            "mi": 0.03,
+        },
+        "validation_metrics": {
+            "ic": 0.02,
+            "rank_ic": 0.02,
+            "icir": 0.2,
+            "rank_icir": 0.2,
+            "mi": 0.03,
+        },
+        "validation_outcome": outcome,
+        "metric_bottlenecks": bottlenecks or [],
+        "guard_status": None,
+        "error": None,
+        "cache_hit": False,
+    }

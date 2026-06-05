@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -18,6 +18,7 @@ from cogalpha.skill_loader import StandardSkillLoader
 DEFAULT_FACTOR_MEMORY_ROOT = Path("outputs/factor_memory")
 MAX_PATTERNS_PER_KIND = 20
 RETRIEVAL_PATTERNS_PER_KIND = 2
+RETRIEVAL_REGIME_HYPOTHESES = 1
 MEMORY_SUMMARIZER_SKILL = "alpha-memory-summarizer"
 
 
@@ -28,6 +29,17 @@ class FactorMemoryPattern(BaseModel):
 
     lesson: str = Field(..., min_length=1)
     evidence_factor_ids: list[int] = Field(default_factory=list)
+
+
+class FactorMemoryRegimeHypothesis(BaseModel):
+    """A weak market-style hypothesis derived from bounded validation evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hypothesis: str = Field(..., min_length=1)
+    confidence: Literal["low", "medium"] = "low"
+    evidence_factor_ids: list[int] = Field(default_factory=list)
+    risk: str = Field(..., min_length=1)
 
 
 class FactorMemoryEvidence(BaseModel):
@@ -43,6 +55,9 @@ class FactorMemoryEvidence(BaseModel):
     rationale: str = Field(..., min_length=1)
     metrics: dict[str, float] = Field(default_factory=dict)
     metric_bottlenecks: list[str] = Field(default_factory=list)
+    split: str | None = None
+    validation_outcome: str | None = None
+    validation_metrics: dict[str, float] = Field(default_factory=dict)
 
 
 class FactorMemoryCompactionRequest(BaseModel):
@@ -56,6 +71,7 @@ class FactorMemoryCompactionRequest(BaseModel):
     success_patterns: list[FactorMemoryPattern] = Field(default_factory=list)
     failure_patterns: list[FactorMemoryPattern] = Field(default_factory=list)
     avoid_patterns: list[FactorMemoryPattern] = Field(default_factory=list)
+    regime_hypotheses: list[FactorMemoryRegimeHypothesis] = Field(default_factory=list)
     metric_bottlenecks: dict[str, int] = Field(default_factory=dict)
     max_patterns_per_kind: int = Field(default=MAX_PATTERNS_PER_KIND, ge=1)
 
@@ -68,6 +84,7 @@ class FactorMemoryCompactionResult(BaseModel):
     success_patterns: list[FactorMemoryPattern] = Field(default_factory=list)
     failure_patterns: list[FactorMemoryPattern] = Field(default_factory=list)
     avoid_patterns: list[FactorMemoryPattern] = Field(default_factory=list)
+    regime_hypotheses: list[FactorMemoryRegimeHypothesis] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -95,6 +112,17 @@ class FactorMemoryUpdateResult:
     factor_pool_root: Path
     memory_root: Path
     processed_factor_ids: list[int]
+    domain_updates: dict[str, int]
+    state_path: Path
+
+
+@dataclass(frozen=True)
+class FactorMemoryValidationUpdateResult:
+    """Summary of one validation-audit memory update."""
+
+    audit_path: Path
+    memory_root: Path
+    processed_audit_keys: list[str]
     domain_updates: dict[str, int]
     state_path: Path
 
@@ -176,6 +204,83 @@ def update_factor_memory(
     )
 
 
+def update_factor_memory_from_validation_audit(
+    *,
+    audit_path: str | Path,
+    memory_root: str | Path = DEFAULT_FACTOR_MEMORY_ROOT,
+    summarizer: FactorMemorySummarizer | None = None,
+    max_patterns_per_kind: int = MAX_PATTERNS_PER_KIND,
+) -> FactorMemoryValidationUpdateResult:
+    """Update compressed memory with validation-set success/failure lessons."""
+
+    audit_file = Path(audit_path)
+    memory_path = Path(memory_root)
+    report = _read_json(audit_file)
+    report_split = str(report["split"])
+    if report_split == "test":
+        raise ValueError("Test split audit reports must not update generation memory.")
+
+    state_path = memory_path / "state.json"
+    state = _load_memory_state(state_path)
+    processed_keys = set(state.get("processed_validation_audit_keys", []))
+    newly_processed: list[str] = []
+    domain_updates: dict[str, int] = {}
+    evidence_by_domain: dict[str, list[FactorMemoryEvidence]] = {}
+
+    for record in report.get("records", []):
+        factor_id = int(record["factor_id"])
+        audit_key = _validation_audit_key(str(report["run_id"]), report_split, factor_id)
+        if audit_key in processed_keys:
+            continue
+        domain = str(record["domain_agent"])
+        memory = _load_domain_memory(memory_path, domain)
+        _update_domain_memory_from_validation_record(
+            memory,
+            split=report_split,
+            record=dict(record),
+            max_patterns_per_kind=max_patterns_per_kind,
+        )
+        evidence_by_domain.setdefault(domain, []).append(
+            _build_validation_evidence(record=dict(record), split=report_split)
+        )
+        _write_domain_memory(memory_path, domain, memory)
+        processed_keys.add(audit_key)
+        newly_processed.append(audit_key)
+        domain_updates[domain] = domain_updates.get(domain, 0) + 1
+
+    if summarizer is not None:
+        for domain, evidence in evidence_by_domain.items():
+            memory = _load_domain_memory(memory_path, domain)
+            compacted = _summarize_domain_memory(
+                memory,
+                evidence=evidence,
+                summarizer=summarizer,
+                max_patterns_per_kind=max_patterns_per_kind,
+            )
+            _write_domain_memory(memory_path, domain, compacted)
+
+    if newly_processed:
+        state["processed_validation_audit_keys"] = sorted(processed_keys)
+        state["updated_at"] = _utc_now()
+        state["validation_audit_count"] = (
+            int(state.get("validation_audit_count", 0)) + len(newly_processed)
+        )
+        state["validation_domain_updates"] = _merge_domain_updates(
+            dict(state.get("validation_domain_updates", {})),
+            domain_updates,
+        )
+        _write_json(state_path, state)
+
+    _write_retrieval_caches(memory_path)
+    return FactorMemoryValidationUpdateResult(
+        audit_path=audit_file,
+        memory_root=memory_path,
+        processed_audit_keys=newly_processed,
+        domain_updates=domain_updates,
+        state_path=state_path,
+    )
+
+
 def build_factor_memory_summarizer(
     client,
     *,
@@ -197,6 +302,7 @@ def build_prior_lessons(
     domain_memory: dict[str, Any],
     *,
     patterns_per_kind: int = RETRIEVAL_PATTERNS_PER_KIND,
+    regime_hypotheses: int = RETRIEVAL_REGIME_HYPOTHESES,
 ) -> str:
     """Build a compact prompt block for one domain agent."""
 
@@ -216,6 +322,22 @@ def build_prior_lessons(
             evidence = ", ".join(str(item) for item in pattern.get("evidence_factor_ids", []))
             suffix = f" Evidence factor IDs: {evidence}." if evidence else ""
             lines.append(f"- {pattern['lesson']}{suffix}")
+    hypotheses = domain_memory.get("regime_hypotheses", [])[:regime_hypotheses]
+    if hypotheses:
+        lines.append("")
+        lines.append("## Regime Hypotheses")
+        for hypothesis in hypotheses:
+            evidence = ", ".join(
+                str(item) for item in hypothesis.get("evidence_factor_ids", [])
+            )
+            suffix = f" Evidence factor IDs: {evidence}." if evidence else ""
+            lines.append(
+                f"- Hypothesis: {hypothesis['hypothesis']} "
+                f"Confidence: {hypothesis.get('confidence', 'low')}. "
+                f"Risk: {hypothesis['risk']} "
+                "Use as inspiration only; keep mechanisms diverse."
+                f"{suffix}"
+            )
     return "\n".join(lines).strip() + "\n"
 
 
@@ -265,6 +387,48 @@ def _update_domain_memory(
     return memory
 
 
+def _update_domain_memory_from_validation_record(
+    memory: dict[str, Any],
+    *,
+    split: str,
+    record: dict[str, Any],
+    max_patterns_per_kind: int,
+) -> None:
+    factor_id = int(record["factor_id"])
+    outcome = str(record["validation_outcome"])
+    memory["updated_at"] = _utc_now()
+    memory["validation_counts"][outcome] = (
+        int(memory["validation_counts"].get(outcome, 0)) + 1
+    )
+
+    bottlenecks = list(record.get("metric_bottlenecks") or [])
+    for metric_name in bottlenecks:
+        memory["validation_metric_bottlenecks"][metric_name] = (
+            int(memory["validation_metric_bottlenecks"].get(metric_name, 0)) + 1
+        )
+
+    if outcome == "validation_success":
+        _append_pattern(
+            memory["success_patterns"],
+            _validation_success_lesson(record, split),
+            factor_id,
+            max_patterns=max_patterns_per_kind,
+        )
+    elif outcome == "validation_failure":
+        _append_pattern(
+            memory["failure_patterns"],
+            _validation_failure_lesson(record, split),
+            factor_id,
+            max_patterns=max_patterns_per_kind,
+        )
+        _append_pattern(
+            memory["avoid_patterns"],
+            _validation_avoid_lesson(record, split),
+            factor_id,
+            max_patterns=max_patterns_per_kind,
+        )
+
+
 def _summarize_domain_memory(
     memory: dict[str, Any],
     *,
@@ -286,6 +450,10 @@ def _summarize_domain_memory(
         avoid_patterns=[
             FactorMemoryPattern.model_validate(pattern)
             for pattern in memory.get("avoid_patterns", [])
+        ],
+        regime_hypotheses=[
+            FactorMemoryRegimeHypothesis.model_validate(hypothesis)
+            for hypothesis in memory.get("regime_hypotheses", [])
         ],
         metric_bottlenecks=dict(memory.get("metric_bottlenecks", {})),
         max_patterns_per_kind=max_patterns_per_kind,
@@ -314,6 +482,11 @@ def _summarize_domain_memory(
         max_patterns=max_patterns_per_kind,
         fallback=memory.get("avoid_patterns", []),
     )
+    memory["regime_hypotheses"] = _validated_regime_hypotheses(
+        result.regime_hypotheses,
+        allowed_factor_ids=allowed_factor_ids,
+        fallback=memory.get("regime_hypotheses", []),
+    )
     memory["updated_at"] = _utc_now()
     return memory
 
@@ -327,6 +500,8 @@ def _allowed_request_factor_ids(request: FactorMemoryCompactionRequest) -> set[i
     ):
         for pattern in patterns:
             allowed.update(pattern.evidence_factor_ids)
+    for hypothesis in request.regime_hypotheses:
+        allowed.update(hypothesis.evidence_factor_ids)
     return allowed
 
 
@@ -359,6 +534,36 @@ def _validated_patterns(
     return list(fallback)[:max_patterns]
 
 
+def _validated_regime_hypotheses(
+    hypotheses: list[FactorMemoryRegimeHypothesis],
+    *,
+    allowed_factor_ids: set[int],
+    fallback: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    validated: list[dict[str, Any]] = []
+    for hypothesis in hypotheses:
+        evidence = [
+            factor_id
+            for factor_id in hypothesis.evidence_factor_ids
+            if factor_id in allowed_factor_ids
+        ]
+        if not evidence:
+            continue
+        validated.append(
+            {
+                "hypothesis": hypothesis.hypothesis,
+                "confidence": hypothesis.confidence,
+                "evidence_factor_ids": evidence,
+                "risk": hypothesis.risk,
+            }
+        )
+        if len(validated) >= 2:
+            break
+    if validated:
+        return validated
+    return list(fallback)[:2]
+
+
 def _build_evidence(entry: dict[str, Any], factor: dict[str, Any]) -> FactorMemoryEvidence:
     metrics = {
         field: float(factor["metrics"][field])
@@ -374,6 +579,31 @@ def _build_evidence(entry: dict[str, Any], factor: dict[str, Any]) -> FactorMemo
         rationale=str(factor.get("rationale") or "No rationale provided."),
         metrics=metrics,
         metric_bottlenecks=_metric_bottlenecks(metrics),
+    )
+
+
+def _build_validation_evidence(
+    *,
+    record: dict[str, Any],
+    split: str,
+) -> FactorMemoryEvidence:
+    validation_metrics = {
+        field: float(record["validation_metrics"][field])
+        for field in METRIC_FIELDS
+        if record.get("validation_metrics")
+        and record["validation_metrics"].get(field) is not None
+    }
+    return FactorMemoryEvidence(
+        factor_id=int(record["factor_id"]),
+        pool=str(record["pool"]),
+        domain_agent=str(record["domain_agent"]),
+        factor_name=str(record["factor_name"]),
+        rationale=f"{record['factor_name']} validation audit outcome.",
+        metrics=dict(record.get("train_metrics") or {}),
+        metric_bottlenecks=list(record.get("metric_bottlenecks") or []),
+        split=split,
+        validation_outcome=str(record["validation_outcome"]),
+        validation_metrics=validation_metrics,
     )
 
 
@@ -404,6 +634,39 @@ def _avoid_lesson(factor: dict[str, Any], bottlenecks: list[str]) -> str:
     weak = ", ".join(bottlenecks) if bottlenecks else "weak validation metrics"
     formula = factor.get("formula") or factor.get("factor_name")
     return f"Avoid repeating {formula!r} without addressing {weak}."
+
+
+def _validation_success_lesson(record: dict[str, Any], split: str) -> str:
+    factor_name = str(record["factor_name"])
+    return (
+        f"{factor_name} passed {split} validation minima after qualifying; "
+        "treat this mechanism as more likely to generalize out of sample."
+    )
+
+
+def _validation_failure_lesson(record: dict[str, Any], split: str) -> str:
+    factor_name = str(record["factor_name"])
+    weak = _weak_metric_text(record)
+    return (
+        f"{factor_name} qualified in the source run but failed {split} "
+        f"validation minima; weak validation metrics were {weak}."
+    )
+
+
+def _validation_avoid_lesson(record: dict[str, Any], split: str) -> str:
+    factor_name = str(record["factor_name"])
+    weak = _weak_metric_text(record)
+    return (
+        f"Avoid relying on {factor_name} without improving out-of-sample "
+        f"{split} robustness for {weak}."
+    )
+
+
+def _weak_metric_text(record: dict[str, Any]) -> str:
+    bottlenecks = list(record.get("metric_bottlenecks") or [])
+    if bottlenecks:
+        return ", ".join(str(metric) for metric in bottlenecks)
+    return "the five-metric validation gate"
 
 
 def _append_pattern(
@@ -445,8 +708,15 @@ def _load_memory_state(path: Path) -> dict[str, Any]:
             "processed_factor_count": 0,
             "updated_at": None,
             "domain_updates": {},
+            "processed_validation_audit_keys": [],
+            "validation_audit_count": 0,
+            "validation_domain_updates": {},
         }
-    return _read_json(path)
+    state = _read_json(path)
+    state.setdefault("processed_validation_audit_keys", [])
+    state.setdefault("validation_audit_count", 0)
+    state.setdefault("validation_domain_updates", {})
+    return state
 
 
 def _load_domain_memory(memory_root: Path, skill_name: str) -> dict[str, Any]:
@@ -468,6 +738,13 @@ def _new_domain_memory(skill_name: str) -> dict[str, Any]:
         "failure_patterns": [],
         "metric_bottlenecks": {},
         "avoid_patterns": [],
+        "regime_hypotheses": [],
+        "validation_counts": {
+            "validation_success": 0,
+            "validation_failure": 0,
+            "validation_error": 0,
+        },
+        "validation_metric_bottlenecks": {},
     }
 
 
@@ -478,6 +755,16 @@ def _ensure_domain_memory_defaults(memory: dict[str, Any]) -> None:
     memory.setdefault("failure_patterns", [])
     memory.setdefault("metric_bottlenecks", {})
     memory.setdefault("avoid_patterns", [])
+    memory.setdefault("regime_hypotheses", [])
+    memory.setdefault(
+        "validation_counts",
+        {
+            "validation_success": 0,
+            "validation_failure": 0,
+            "validation_error": 0,
+        },
+    )
+    memory.setdefault("validation_metric_bottlenecks", {})
 
 
 def _write_domain_memory(memory_root: Path, skill_name: str, memory: dict[str, Any]) -> None:
@@ -510,6 +797,10 @@ def _merge_domain_updates(
     for domain, count in updates.items():
         merged[domain] = merged.get(domain, 0) + count
     return merged
+
+
+def _validation_audit_key(run_id: str, split: str, factor_id: int) -> str:
+    return f"{run_id}:{split}:{factor_id}"
 
 
 def _short_text(value: object, limit: int = 220) -> str:

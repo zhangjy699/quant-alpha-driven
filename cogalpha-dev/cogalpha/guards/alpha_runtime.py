@@ -33,7 +33,8 @@ def run_runtime_alpha_code_guard(
 
     issues: list[GuardIssue] = []
     numeric_values = factor_values.apply(lambda series: pd.to_numeric(series, errors="coerce"))
-    raw_values = numeric_values.to_numpy(dtype=float)
+    membership_mask = _membership_mask(ohlcv_panel, numeric_values)
+    raw_values = numeric_values.to_numpy(dtype=float)[membership_mask.to_numpy(dtype=bool)]
     total_count = raw_values.size
 
     if total_count == 0:
@@ -86,7 +87,26 @@ def run_runtime_alpha_code_guard(
         metadata={
             "rows": int(numeric_values.shape[0]),
             "assets": int(numeric_values.shape[1]),
+            "evaluated_count": int(total_count),
             "nan_fraction": float(nan_fraction),
             "inf_count": int(inf_count),
         },
+    )
+
+
+def _membership_mask(
+    ohlcv_panel: pd.DataFrame,
+    factor_values: pd.DataFrame,
+) -> pd.DataFrame:
+    membership = pd.Series(
+        True,
+        index=pd.MultiIndex.from_frame(
+            ohlcv_panel.index.to_frame(index=False).loc[:, ["date", "asset"]]
+        ),
+    )
+    membership = membership[~membership.index.duplicated()]
+    return (
+        membership.unstack("asset")
+        .reindex(index=factor_values.index, columns=factor_values.columns)
+        .fillna(False)
     )

@@ -12,6 +12,17 @@ from cogalpha.data import (
 )
 
 
+def test_default_split_config_uses_recent_chronological_windows():
+    split = SplitConfig()
+
+    assert split.train_start == date(2018, 1, 1)
+    assert split.train_end == date(2021, 12, 31)
+    assert split.valid_start == date(2022, 1, 1)
+    assert split.valid_end == date(2022, 12, 31)
+    assert split.test_start == date(2023, 1, 1)
+    assert split.test_end == date(2024, 12, 1)
+
+
 def test_normalize_ohlcv_panel_accepts_flat_frame_and_sorts():
     raw = pd.DataFrame(
         {

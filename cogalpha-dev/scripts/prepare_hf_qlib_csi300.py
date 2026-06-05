@@ -31,19 +31,26 @@ def main() -> None:
     parser.add_argument("--skip-universe-filter", action="store_true")
     parser.add_argument("--universe-zip", default="cn_data.zip")
     parser.add_argument("--universe-file", default="cn_data/instruments/csi300.txt")
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use existing files under --raw-dir without contacting Hugging Face.",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     raw_dir = Path(args.raw_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
-    source_info = repo_info(args.repo_id, repo_type="dataset")
+    source_sha = _offline_source_sha(output_dir) if args.offline else None
+    if not args.offline:
+        source_sha = repo_info(args.repo_id, repo_type="dataset").sha
 
-    raw_path = hf_hub_download(
+    raw_path = _local_or_download_file(
         repo_id=args.repo_id,
         filename=args.filename,
-        repo_type="dataset",
-        local_dir=raw_dir,
+        raw_dir=raw_dir,
+        offline=args.offline,
     )
     panel = load_qlib_daily_pv_hdf(
         raw_path,
@@ -53,11 +60,11 @@ def main() -> None:
     universe_zip_path = None
     universe_ranges = []
     if not args.skip_universe_filter:
-        universe_zip_path = hf_hub_download(
+        universe_zip_path = _local_or_download_file(
             repo_id=args.repo_id,
             filename=args.universe_zip,
-            repo_type="dataset",
-            local_dir=raw_dir,
+            raw_dir=raw_dir,
+            offline=args.offline,
         )
         universe_ranges = load_qlib_instrument_ranges(
             universe_zip_path,
@@ -95,7 +102,7 @@ def main() -> None:
     assets = panel.index.get_level_values("asset")
     data_version_payload = {
         "source_repo_id": args.repo_id,
-        "source_repo_sha": source_info.sha,
+        "source_repo_sha": source_sha,
         "source_filename": args.filename,
         "horizon_days": dataset.horizon_days,
         "return_price_column": BaselineExperimentConfig().return_price_column,
@@ -111,7 +118,7 @@ def main() -> None:
     metadata = {
         "prepared_at": datetime.now(UTC).isoformat(),
         "source_repo_id": args.repo_id,
-        "source_repo_sha": source_info.sha,
+        "source_repo_sha": source_sha,
         "source_filename": args.filename,
         "raw_path": str(raw_path),
         "data_version": data_version,
@@ -131,9 +138,9 @@ def main() -> None:
                 "AlphaCandidate observes date t daily OHLCV, enters at the next open, "
                 "and exits after 10 trading opens."
             ),
-            "train": ["2011-01-01", "2019-12-31"],
-            "valid": ["2020-01-01", "2020-12-31"],
-            "test": ["2021-01-01", "2024-12-01"],
+            "train": ["2018-01-01", "2021-12-31"],
+            "valid": ["2022-01-01", "2022-12-31"],
+            "test": ["2023-01-01", "2024-12-01"],
             "fitness_gate": {
                 "qualified_percentile": 0.65,
                 "elite_percentile": 0.80,
@@ -175,6 +182,39 @@ def main() -> None:
     metadata_path = output_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(metadata, indent=2, sort_keys=True))
+
+
+def _local_or_download_file(
+    *,
+    repo_id: str,
+    filename: str,
+    raw_dir: Path,
+    offline: bool,
+) -> str:
+    local_path = raw_dir / filename
+    if offline:
+        if not local_path.exists():
+            raise FileNotFoundError(
+                f"Offline mode requires local file: {local_path}"
+            )
+        return str(local_path)
+    return hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type="dataset",
+        local_dir=raw_dir,
+    )
+
+
+def _offline_source_sha(output_dir: Path) -> str:
+    metadata_path = output_dir / "metadata.json"
+    if not metadata_path.exists():
+        return "offline"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return "offline"
+    return str(metadata.get("source_repo_sha") or "offline")
 
 
 if __name__ == "__main__":

@@ -5,16 +5,50 @@ description: Generates OHLCV alpha candidates focused on daily trend persistence
 
 # Alpha Daily Trend
 
-Explore persistent directional movement, trend quality, multi-day momentum strength, and trend smoothness from daily OHLCV data.
+## Role
+
+AgentDailyTrend is a level 4 CogAlpha domain agent in the Price-Volatility Behavior layer. Its paper focus is: Directional persistence and multi-day momentum strength. Generate compact OHLCV alpha candidates whose mechanism is specific to this layer rather than a generic moving-average or stacked-indicator pattern.
+
+## Inputs
+
+- Runtime payload assembled by SkillInvoker, including candidate, generation, guidance mode, prior feedback, and schema request as applicable.
+- [Alpha Factor Contract](../references/alpha-factor-contract.md) for allowed OHLCV inputs, code shape, and hard safety rules.
+- [Structured Artifacts](../references/structured-artifacts.md) for strict JSON output schemas.
+- [Agentic Workflow](../references/agentic-workflow.md) for observe-plan-generate-self-check-output discipline.
+- [Metric Objectives](../references/metric-objectives.md) for IC, RankIC, ICIR, RankICIR, MI, qualified minima, and elite minima.
+- [Trace-Grounded Learning](../references/trace-grounded-learning.md) for evidence_id, reviewer, rollback, and utility boundaries.
+- [Diversified Guidance](../references/diversified-guidance.md) when the runtime provides a guidance mode for diverse generation.
 
 ## Workflow
 
-1. Read [Alpha Factor Contract](../references/alpha-factor-contract.md).
-2. Read [Structured Artifacts](../references/structured-artifacts.md).
-3. Apply the requested guidance mode from [Diversified Guidance](../references/diversified-guidance.md), if provided.
-4. Generate compact AlphaCandidates that use OHLCV Input only.
-5. Prefer trend quality, slope stability, and risk-adjusted momentum over plain returns.
+1. Observe the requested skill_name, paper_agent_name, level, layer, focus, generation, guidance_mode, and feedback summaries.
+2. Plan one financial mechanism aligned to AgentDailyTrend: Directional persistence and multi-day momentum strength.
+3. Generate one or more AlphaCandidate objects with one clear economic idea, vectorized pandas or numpy code, and concise rationale.
+4. Prefer mechanisms that can improve the full metric gate instead of maximizing only one statistic.
+5. Preserve lineage with agent_skill: alpha-daily-trend, generation, and guidance mode so later trace review can attribute outcomes.
+
+## Anti-Leakage Rules
+
+- Use only present and past OHLCV observations.
+- Do not use negative shifts, centered rolling windows, target returns, labels, future dates, file IO, network IO, subprocesses, or imports outside the allowlist.
+- Do not infer hidden validation data or copy workspace-only overlays into the runtime prompt.
+- Do not stack unrelated indicators to manufacture complexity; keep one testable mechanism.
+
+## Metric Objective
+
+Target balanced improvement across IC, RankIC, ICIR, RankICIR, and MI. For AgentDailyTrend, the primary objective is to express directional persistence and multi-day momentum strength. in a way that can survive both qualified and elite minima. Treat single-metric gains as diagnostic until the full gate clears.
+
+## Self-Check
+
+- Confirm the factor function name starts with factor_, returns one Series, and preserves the input index.
+- Confirm required columns are limited to open, high, low, close, and volume.
+- Confirm rationale names the Price-Volatility Behavior mechanism and not just implementation syntax.
+- Confirm output is strict JSON compatible with AlphaCandidateBatch.
+
+## Trace Expectations
+
+Runtime traces should be able to record skill_name: alpha-daily-trend, paper_agent_name: AgentDailyTrend, candidate_id, generation, guidance_mode, stage, and evidence_id. Candidate metadata should make utility updates trace-grounded and should not imply prompt promotion without review.
 
 ## Output
 
-Return JSON only, compatible with `AlphaCandidateBatch`: `{"candidates": [...]}`.
+Return JSON only, compatible with AlphaCandidateBatch: { "candidates": [...] }.

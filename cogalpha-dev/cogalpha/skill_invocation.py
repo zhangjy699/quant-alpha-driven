@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -32,6 +33,7 @@ class SkillInvoker:
     client: JSONCompletionClient
     inline_references: bool = False
     schema_retry_attempts: int = 1
+    retrieval_cache_root: Path | str | None = None
 
     def invoke(
         self,
@@ -83,6 +85,13 @@ class SkillInvoker:
             output_schema=schema_text,
             inline_references=self.inline_references,
         )
+        retrieval_context = self._load_retrieval_context(skill_name)
+        if retrieval_context:
+            prompt = (
+                f"{prompt}\n\n"
+                "# Retrieved Factor Memory\n"
+                f"{retrieval_context}"
+            )
         return SkillInvocationContext(
             skill_name=skill_name,
             prompt=prompt,
@@ -97,6 +106,17 @@ class SkillInvoker:
                 "paths": list(metadata.paths),
             },
         )
+
+    def _load_retrieval_context(self, skill_name: str) -> str | None:
+        if self.retrieval_cache_root is None:
+            return None
+
+        cache_path = Path(self.retrieval_cache_root) / f"{skill_name}.md"
+        if not cache_path.exists() or not cache_path.is_file():
+            return None
+
+        text = cache_path.read_text(encoding="utf-8").strip()
+        return text or None
 
 
 def _build_schema_retry_prompt(

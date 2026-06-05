@@ -15,7 +15,7 @@ OHLCVColumn = Literal["open", "high", "low", "close", "volume"]
 
 class CandidateStage(StrEnum):
     """Lifecycle stage for an alpha candidate."""
-    # name, value
+
     GENERATED = "generated"
     REPAIRED = "repaired"
     ACCEPTED_BY_QUALITY = "accepted_by_quality"

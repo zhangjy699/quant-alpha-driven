@@ -6,8 +6,12 @@ import json
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+from cogalpha.harness.loop import AgentDecision, AgentLoopState
+from cogalpha.harness.tools import ToolCall, ToolSpec
 
 
 class JSONCompletionClient(Protocol):
@@ -20,6 +24,44 @@ class JSONCompletionClient(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """Return a strict JSON string compatible with the requested schema."""
+
+
+class AgenticDecisionParseError(ValueError):
+    """Raised when a JSON decision cannot be converted into an AgentDecision."""
+
+
+@dataclass(frozen=True)
+class JSONToolDecisionClient:
+    """Convert strict provider JSON completions into agentic tool decisions."""
+
+    client: JSONCompletionClient
+
+    def decide(
+        self,
+        state: AgentLoopState,
+        *,
+        tools: list[ToolSpec],
+    ) -> AgentDecision:
+        raw_json = self.client.complete_json(
+            _build_tool_decision_context(state, tools),
+            "AgentDecision",
+            metadata={
+                "decision_schema": ["content", "tool_calls", "stop_reason"],
+                "available_tools": [tool.name for tool in tools],
+            },
+        )
+        payload = _parse_decision_json(raw_json)
+        return AgentDecision(
+            content=payload["content"],
+            tool_calls=[
+                ToolCall(
+                    name=call["name"],
+                    arguments=call["arguments"],
+                )
+                for call in payload["tool_calls"]
+            ],
+            stop_reason=payload["stop_reason"],
+        )
 
 
 @dataclass(frozen=True)
@@ -133,3 +175,93 @@ def _parse_optional_int(raw_value: str | None) -> int | None:
     if raw_value is None or raw_value == "":
         return None
     return int(raw_value)
+
+
+def _build_tool_decision_context(state: AgentLoopState, tools: list[ToolSpec]) -> str:
+    tool_payload = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": dict(tool.input_schema),
+        }
+        for tool in tools
+    ]
+    state_payload = {
+        "turns": state.turns,
+        "context": state.context,
+        "messages": [
+            {
+                "role": message.role,
+                "content": message.content,
+                "tool_result": None
+                if message.tool_result is None
+                else {
+                    "name": message.tool_result.name,
+                    "success": message.tool_result.success,
+                    "output": message.tool_result.output,
+                    "error": message.tool_result.error,
+                },
+            }
+            for message in state.messages
+        ],
+    }
+    return (
+        "Choose the next CogAlpha tool call or stop decision. Return strict JSON only "
+        "with required fields: content, tool_calls, stop_reason. Use an empty tool_calls "
+        "array only when stop_reason is a non-empty string.\n\n"
+        f"Available tools:\n{json.dumps(tool_payload, sort_keys=True)}\n\n"
+        f"Current state:\n{json.dumps(state_payload, sort_keys=True, default=str)}"
+    )
+
+
+def _parse_decision_json(raw_json: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        msg = f"Malformed JSON decision: {exc.msg}"
+        raise AgenticDecisionParseError(msg) from exc
+
+    if not isinstance(payload, Mapping):
+        msg = "Agentic decision must be a JSON object"
+        raise AgenticDecisionParseError(msg)
+
+    for field_name in ("content", "tool_calls", "stop_reason"):
+        if field_name not in payload:
+            msg = f"Missing required decision field: {field_name}"
+            raise AgenticDecisionParseError(msg)
+
+    if not isinstance(payload["content"], str):
+        msg = "Decision field content must be a string"
+        raise AgenticDecisionParseError(msg)
+    if payload["stop_reason"] is not None and not isinstance(payload["stop_reason"], str):
+        msg = "Decision field stop_reason must be a string or null"
+        raise AgenticDecisionParseError(msg)
+    if not isinstance(payload["tool_calls"], list):
+        msg = "Decision field tool_calls must be a list"
+        raise AgenticDecisionParseError(msg)
+
+    tool_calls = [_parse_tool_call(item, index) for index, item in enumerate(payload["tool_calls"])]
+    return {
+        "content": payload["content"],
+        "tool_calls": tool_calls,
+        "stop_reason": payload["stop_reason"],
+    }
+
+
+def _parse_tool_call(raw_call: object, index: int) -> dict[str, Any]:
+    if not isinstance(raw_call, Mapping):
+        msg = f"tool_calls[{index}] must be an object"
+        raise AgenticDecisionParseError(msg)
+    if "name" not in raw_call:
+        msg = f"tool_calls[{index}] missing required field: name"
+        raise AgenticDecisionParseError(msg)
+    if "arguments" not in raw_call:
+        msg = f"tool_calls[{index}] missing required field: arguments"
+        raise AgenticDecisionParseError(msg)
+    if not isinstance(raw_call["name"], str) or not raw_call["name"].strip():
+        msg = f"tool_calls[{index}].name must be a non-empty string"
+        raise AgenticDecisionParseError(msg)
+    if not isinstance(raw_call["arguments"], Mapping):
+        msg = f"tool_calls[{index}].arguments must be an object"
+        raise AgenticDecisionParseError(msg)
+    return {"name": raw_call["name"], "arguments": dict(raw_call["arguments"])}

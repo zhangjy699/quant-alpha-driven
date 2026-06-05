@@ -6,6 +6,8 @@ from typing import Any
 
 from cogalpha.config import MVPLoopConfig
 from cogalpha.guards import DeterministicGuardPipeline
+from cogalpha.harness.cogalpha_tools import CogAlphaRuntime
+from cogalpha.harness.mvp import MVPHarnessGraph
 from cogalpha.nodes import DomainAgentNode, EvolutionNode, FitnessGateNode, QualityPipelineNode
 from cogalpha.nodes.fitness import CandidateMetricsProvider
 from cogalpha.registry import DOMAIN_AGENT_SPECS, DomainAgentSpec
@@ -116,6 +118,18 @@ def build_mvp_graph(
     installed in a fresh development environment.
     """
 
+    loop_config = config or MVPLoopConfig()
+    if invoker is not None:
+        return MVPHarnessGraph(
+            CogAlphaRuntime(
+                invoker=invoker,
+                config=loop_config,
+                metrics_provider=metrics_provider,
+                guard_pipeline=guard_pipeline,
+                agent_specs=agent_specs,
+            )
+        )
+
     try:
         from langgraph.graph import END, StateGraph
     except ModuleNotFoundError as exc:
@@ -124,17 +138,10 @@ def build_mvp_graph(
         ) from exc
 
     graph = StateGraph(dict)
-    loop_config = config or MVPLoopConfig()
-    if invoker is not None:
-        generation = build_generation_node(invoker, loop_config, agent_specs)
-        quality = build_quality_node(invoker, loop_config, guard_pipeline)
-        fitness = build_fitness_node(loop_config, metrics_provider)
-        evolution = build_evolution_node(invoker, loop_config)
-    else:
-        generation = generation_node
-        quality = quality_node
-        fitness = fitness_node
-        evolution = evolution_node
+    generation = generation_node
+    quality = quality_node
+    fitness = fitness_node
+    evolution = evolution_node
 
     graph.add_node("generation", generation)
     graph.add_node("quality", quality)

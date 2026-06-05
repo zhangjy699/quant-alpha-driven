@@ -47,6 +47,8 @@ def main() -> None:
     parser.add_argument("--parent-pool-size", type=int, default=4)
     parser.add_argument("--max-repair-attempts", type=int, default=1)
     parser.add_argument("--inline-references", action="store_true")
+    parser.add_argument("--use-factor-memory", action="store_true")
+    parser.add_argument("--factor-memory-root", default="outputs/factor_memory")
     parser.add_argument("--key-file", default="KEY.md")
     parser.add_argument("--provider", choices=["deepseek", "openai", "custom"], default="deepseek")
     parser.add_argument("--model", default=None)
@@ -79,11 +81,16 @@ def main() -> None:
         loader=StandardSkillLoader(PROJECT_ROOT / "skills"),
         client=client,
         inline_references=args.inline_references,
+        retrieval_cache_root=(
+            Path(args.factor_memory_root) / "retrieval_cache"
+            if args.use_factor_memory
+            else None
+        ),
     )
     invoker = RecordingInvoker(
         inner=skill_invoker,
         recorder=InvocationRecorder(run_dir / "skill_invocations.jsonl"),
-        context_variant="inline_references" if args.inline_references else "minimal",
+        context_variant=_context_variant(args),
     )
     config = MVPLoopConfig(
         alphas_per_domain_agent=args.alphas_per_agent,
@@ -150,6 +157,11 @@ def main() -> None:
             str(Path(args.data_dir) / "metadata.json"),
             str(Path(args.data_dir) / f"{args.split}_ohlcv.parquet"),
             str(Path(args.data_dir) / f"{args.split}_forward_returns.parquet"),
+            *(
+                [str(Path(args.factor_memory_root) / "retrieval_cache")]
+                if args.use_factor_memory
+                else []
+            ),
             *[spec.skill_name for spec in agent_specs],
         ],
         model_settings={
@@ -160,6 +172,10 @@ def main() -> None:
             "thinking": str(client.thinking),
             "max_tokens": str(client.max_tokens),
             "inline_references": str(args.inline_references),
+            "use_factor_memory": str(args.use_factor_memory),
+            "factor_memory_root": (
+                str(Path(args.factor_memory_root)) if args.use_factor_memory else ""
+            ),
         },
         notes="Real LLM Skill-Driven DAG run. Test split must not be used for tuning.",
     )
@@ -251,6 +267,13 @@ def _is_openai_base_url(base_url: str) -> bool:
     return "api.openai.com" in base_url.lower()
 
 
+def _context_variant(args: argparse.Namespace) -> str:
+    variant = "inline_references" if args.inline_references else "minimal"
+    if args.use_factor_memory:
+        variant = f"{variant}+factor_memory"
+    return variant
+
+
 def _summarize_run(
     state: CogAlphaState,
     invoker: RecordingInvoker,
@@ -265,6 +288,10 @@ def _summarize_run(
         "data_version": metadata["data_version"],
         "agent_limit": args.agent_limit,
         "max_generations": args.max_generations,
+        "use_factor_memory": args.use_factor_memory,
+        "factor_memory_root": (
+            str(Path(args.factor_memory_root)) if args.use_factor_memory else None
+        ),
         "node_history": [entry.node_name for entry in state.node_history],
         "skill_calls": len(invoker.calls),
         "skill_errors": sum(1 for call in invoker.calls if call["status"] != "ok"),

@@ -10,6 +10,7 @@ from cogalpha.candidate_lifecycle import (
     classify_candidates_by_fitness,
     dedupe_candidates,
     select_parent_pool,
+    select_promising_rejected_parents,
 )
 from cogalpha.config import MVPLoopConfig
 from cogalpha.feedback import build_generation_feedback
@@ -60,6 +61,23 @@ class FitnessGateNode:
         parsed.qualified_pool = select_parent_pool(
             qualified=classification.qualified,
             existing_elites=parsed.elite_pool,
+            promising_rejected=(),
+            parent_pool_size=self.config.parent_pool_size,
+            elite_carry_forward=self.config.elite_carry_forward,
+        )
+        promising_rejected = select_promising_rejected_parents(
+            classification.rejected,
+            min_primary_metrics=(
+                self.config.experiment.fitness_gate.promising_parent_min_primary_metrics
+            ),
+            min_composite_score=(
+                self.config.experiment.fitness_gate.promising_parent_min_composite
+            ),
+        )
+        parsed.parent_pool = select_parent_pool(
+            qualified=classification.qualified,
+            existing_elites=parsed.elite_pool,
+            promising_rejected=promising_rejected,
             parent_pool_size=self.config.parent_pool_size,
             elite_carry_forward=self.config.elite_carry_forward,
         )
@@ -75,6 +93,8 @@ class FitnessGateNode:
                     "qualified": len(classification.qualified),
                     "elite": len(classification.elite),
                     "rejected": len(classification.rejected),
+                    "promising_rejected_parents": len(promising_rejected),
+                    "parent_pool": len(parsed.parent_pool),
                 },
             )
         )

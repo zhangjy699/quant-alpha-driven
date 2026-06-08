@@ -30,7 +30,8 @@ class EvolutionNode:
 
     def __call__(self, state: dict) -> dict:
         parsed = CogAlphaState.model_validate(state)
-        parents = select_evolution_parents(parsed.qualified_pool, self.config.parent_pool_size)
+        parent_candidates = parsed.parent_pool or parsed.qualified_pool
+        parents = select_evolution_parents(parent_candidates, self.config.parent_pool_size)
         next_generation = parsed.generation + 1
         children: list[AlphaCandidate] = []
         errors: list[dict[str, str]] = []

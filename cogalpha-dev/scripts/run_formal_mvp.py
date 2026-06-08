@@ -297,6 +297,7 @@ def _summarize_run(
         "skill_errors": sum(1 for call in invoker.calls if call["status"] != "ok"),
         "qualified": len(state.qualified_pool),
         "elite": len(state.elite_pool),
+        "parent_pool": len(state.parent_pool),
         "rejected": len(state.rejected_pool),
         "remaining_candidates": len(state.candidates),
         "cache_hits": metrics_provider.cache_hits_by_candidate_id,
@@ -338,7 +339,7 @@ def _build_formal_run_report(
                 name="data_contract",
                 status=StopGoDecision.GO,
                 summary=(
-                    "Prepared CSI300 split uses 10-day next-open forward returns and recorded "
+                    "Prepared market-data split uses 10-day next-open forward returns and recorded "
                     "data_version."
                 ),
                 artifacts=[str(manifest_path)],

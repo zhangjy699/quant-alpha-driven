@@ -8,7 +8,7 @@ Usage:
 
 Options:
   --run-dir PATH             Formal MVP run directory containing final_state.json.
-  --data-dir PATH            Prepared data directory. Default: data/processed/csi300
+  --data-dir PATH            Prepared data directory. Default: data/processed/company_all_a
   --split NAME               Validation split. Default: valid
   --factor-pool PATH         Shared factor pool root. Default: outputs/factor_pool
   --memory-root PATH         Factor memory root. Default: outputs/factor_memory

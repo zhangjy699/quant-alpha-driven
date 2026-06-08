@@ -12,7 +12,7 @@ Options:
   --sleep-seconds N                Pause between runs. Default: 0
   --summarizer-every N             Enable LLM summarizer every N post runs. Default: 5
   --run-prefix TEXT                Run ID prefix. Default: formal-mvp-loop
-  --data-dir PATH                  Prepared data directory. Default: data/processed/csi300
+  --data-dir PATH                  Prepared data directory. Default: data/processed/company_all_a
   --run-output-root PATH           Formal run output root. Default: outputs/experiments
   --factor-pool PATH               Shared factor pool root. Default: outputs/factor_pool
   --memory-root PATH               Factor memory root. Default: outputs/factor_memory

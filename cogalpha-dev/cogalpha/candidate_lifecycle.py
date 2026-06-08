@@ -14,6 +14,8 @@ from cogalpha.schemas import (
     FitnessMetrics,
 )
 
+PRIMARY_FITNESS_FIELDS = ("ic", "rank_ic", "icir", "rank_icir")
+
 
 @dataclass(frozen=True)
 class FitnessClassification:
@@ -124,17 +126,42 @@ def select_parent_pool(
     *,
     qualified: Sequence[AlphaCandidate],
     existing_elites: Sequence[AlphaCandidate],
+    promising_rejected: Sequence[AlphaCandidate] = (),
     parent_pool_size: int,
     elite_carry_forward: int,
 ) -> list[AlphaCandidate]:
-    """Select the Parent Pool from carried elites and newly qualified candidates."""
+    """Select the parent-only pool used by evolution."""
 
     elite_carry = sorted(
         existing_elites,
         key=lambda candidate: composite_fitness_score(candidate_metrics(candidate)),
         reverse=True,
     )[:elite_carry_forward]
-    return dedupe_candidates(list(elite_carry) + list(qualified))[:parent_pool_size]
+    promising = sorted(
+        promising_rejected,
+        key=lambda candidate: composite_fitness_score(candidate_metrics(candidate)),
+        reverse=True,
+    )
+    return dedupe_candidates(list(elite_carry) + list(qualified) + promising)[:parent_pool_size]
+
+
+def select_promising_rejected_parents(
+    rejected: Sequence[AlphaCandidate],
+    *,
+    min_primary_metrics: int,
+    min_composite_score: float,
+) -> list[AlphaCandidate]:
+    """Return rejected-by-fitness candidates that are useful only as evolution parents."""
+
+    return [
+        candidate
+        for candidate in rejected
+        if _is_promising_rejected_parent(
+            candidate,
+            min_primary_metrics=min_primary_metrics,
+            min_composite_score=min_composite_score,
+        )
+    ]
 
 
 def dedupe_candidates(candidates: Sequence[AlphaCandidate]) -> list[AlphaCandidate]:
@@ -153,6 +180,24 @@ def candidate_metrics(candidate: AlphaCandidate) -> FitnessMetrics | None:
     if raw_metrics is None:
         return None
     return FitnessMetrics.model_validate(raw_metrics)
+
+
+def _is_promising_rejected_parent(
+    candidate: AlphaCandidate,
+    *,
+    min_primary_metrics: int,
+    min_composite_score: float,
+) -> bool:
+    if candidate.stage != CandidateStage.REJECTED_BY_FITNESS:
+        return False
+    metrics = candidate_metrics(candidate)
+    if metrics is None:
+        return False
+    primary_passes = sum(1 for field in PRIMARY_FITNESS_FIELDS if getattr(metrics, field) > 0)
+    return (
+        primary_passes >= min_primary_metrics
+        and composite_fitness_score(metrics) > min_composite_score
+    )
 
 
 def _with_stage(candidate: AlphaCandidate, stage: CandidateStage) -> AlphaCandidate:

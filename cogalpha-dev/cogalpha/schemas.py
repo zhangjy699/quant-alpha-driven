@@ -286,6 +286,7 @@ class CogAlphaState(BaseModel):
     candidates: list[AlphaCandidate] = Field(default_factory=list)
     qualified_pool: list[AlphaCandidate] = Field(default_factory=list)
     elite_pool: list[AlphaCandidate] = Field(default_factory=list)
+    parent_pool: list[AlphaCandidate] = Field(default_factory=list)
     rejected_pool: list[AlphaCandidate] = Field(default_factory=list)
     feedback: GenerationFeedback = Field(default_factory=GenerationFeedback)
     node_history: list[DAGNodeResult] = Field(default_factory=list)

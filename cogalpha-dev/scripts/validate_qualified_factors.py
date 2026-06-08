@@ -31,7 +31,7 @@ def main() -> None:
         required=True,
         help="Formal MVP run directory containing final_state.json.",
     )
-    parser.add_argument("--data-dir", default="data/processed/csi300")
+    parser.add_argument("--data-dir", default="data/processed/company_all_a")
     parser.add_argument("--split", choices=["train", "valid", "test"], default="valid")
     parser.add_argument("--factor-pool", default="outputs/factor_pool")
     parser.add_argument("--memory-root", default="outputs/factor_memory")

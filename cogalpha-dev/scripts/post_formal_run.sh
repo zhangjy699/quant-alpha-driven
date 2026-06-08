@@ -21,7 +21,7 @@ USAGE
 }
 
 RUN_DIR=""
-DATA_DIR="data/processed/csi300"
+DATA_DIR="data/processed/company_all_a"
 SPLIT="valid"
 FACTOR_POOL="outputs/factor_pool"
 MEMORY_ROOT="outputs/factor_memory"

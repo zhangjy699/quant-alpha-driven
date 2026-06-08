@@ -25,16 +25,16 @@ def main() -> None:
     )
     parser.add_argument("--repo-id", default="QuantaAlpha/qlib_csi300")
     parser.add_argument("--filename", default="daily_pv.h5")
-    parser.add_argument("--output-dir", default="data/processed/csi300")
-    parser.add_argument("--raw-dir", default="data/raw/hf_qlib_csi300")
+    parser.add_argument("--output-dir", default="data/processed/company_all_a")
+    parser.add_argument("--raw-dir", default="data/raw/company_all_a")
     parser.add_argument("--keep-index-instruments", action="store_true")
     parser.add_argument("--skip-universe-filter", action="store_true")
     parser.add_argument("--universe-zip", default="cn_data.zip")
-    parser.add_argument("--universe-file", default="cn_data/instruments/csi300.txt")
+    parser.add_argument("--universe-file", default="cn_data/instruments/all_a.txt")
     parser.add_argument(
-        "--offline",
+        "--online",
         action="store_true",
-        help="Use existing files under --raw-dir without contacting Hugging Face.",
+        help="Download from hugging face instead of using existing files under --raw-dir.",
     )
     args = parser.parse_args()
 
@@ -42,15 +42,16 @@ def main() -> None:
     raw_dir = Path(args.raw_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
-    source_sha = _offline_source_sha(output_dir) if args.offline else None
-    if not args.offline:
+    offline = not args.online
+    source_sha = _offline_source_sha(output_dir) if offline else None
+    if not offline:
         source_sha = repo_info(args.repo_id, repo_type="dataset").sha
 
     raw_path = _local_or_download_file(
         repo_id=args.repo_id,
         filename=args.filename,
         raw_dir=raw_dir,
-        offline=args.offline,
+        offline=offline,
     )
     panel = load_qlib_daily_pv_hdf(
         raw_path,
@@ -64,7 +65,7 @@ def main() -> None:
             repo_id=args.repo_id,
             filename=args.universe_zip,
             raw_dir=raw_dir,
-            offline=args.offline,
+            offline=offline,
         )
         universe_ranges = load_qlib_instrument_ranges(
             universe_zip_path,

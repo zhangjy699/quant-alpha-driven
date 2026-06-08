@@ -38,7 +38,7 @@ DEFAULT_OPENAI_CHAT_MODEL = "gpt-4o-mini-2024-07-18"
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a formal CogAlpha MVP experiment.")
     parser.add_argument("--run-id", default=None)
-    parser.add_argument("--data-dir", default="data/processed/csi300")
+    parser.add_argument("--data-dir", default="data/processed/company_all_a")
     parser.add_argument("--split", choices=["train", "valid", "test"], default="valid")
     parser.add_argument("--output-root", default="outputs/experiments")
     parser.add_argument("--agent-limit", type=int, default=3)

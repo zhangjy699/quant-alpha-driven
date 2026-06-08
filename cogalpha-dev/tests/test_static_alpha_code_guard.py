@@ -40,3 +40,22 @@ def factor_uses_target(df):
     report = run_static_alpha_code_guard(code, "factor_uses_target")
     assert report.status == GuardStatus.FAIL
     assert any(issue.code == "unknown_input_column" for issue in report.issues)
+
+
+def test_static_guard_rejects_custom_rolling_apply():
+    code = '''
+def factor_trend_strength(df):
+    """Invalid expensive rolling apply."""
+    df_copy = df.copy()
+
+    def slope_tstat(window):
+        return window.mean()
+
+    df_copy["factor_trend_strength"] = (
+        df_copy["close"].rolling(window=20).apply(slope_tstat, raw=False)
+    )
+    return df_copy["factor_trend_strength"]
+'''
+    report = run_static_alpha_code_guard(code, "factor_trend_strength")
+    assert report.status == GuardStatus.FAIL
+    assert any(issue.code == "expensive_rolling_apply" for issue in report.issues)

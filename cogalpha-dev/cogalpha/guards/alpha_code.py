@@ -139,6 +139,19 @@ def _check_call(node: ast.Call, issues: list[GuardIssue]) -> None:
                         )
                     )
 
+    if _is_rolling_apply_call(node):
+        issues.append(
+            GuardIssue(
+                code="expensive_rolling_apply",
+                message=(
+                    "Custom rolling.apply functions are forbidden because they can stall "
+                    "runtime validation on large market panels; use vectorized rolling "
+                    "aggregations instead."
+                ),
+                location=f"line {node.lineno}",
+            )
+        )
+
 
 def _check_subscript(node: ast.Subscript, issues: list[GuardIssue]) -> None:
     if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
@@ -167,6 +180,17 @@ def _call_name(func: ast.AST) -> str:
     if isinstance(func, ast.Subscript):
         return _call_name(func.value)
     return ""
+
+
+def _is_rolling_apply_call(node: ast.Call) -> bool:
+    if not isinstance(node.func, ast.Attribute):
+        return False
+    if node.func.attr != "apply":
+        return False
+    rolling_call = node.func.value
+    if not isinstance(rolling_call, ast.Call):
+        return False
+    return _call_name(rolling_call.func).endswith(".rolling")
 
 
 def _is_known_dataframe_column(column: str) -> bool:

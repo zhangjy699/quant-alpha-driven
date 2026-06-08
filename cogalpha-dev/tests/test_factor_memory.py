@@ -4,6 +4,7 @@ from cogalpha.factor_memory import (
     FactorMemoryCompactionResult,
     build_prior_lessons,
     update_factor_memory,
+    update_factor_memory_from_backtest_audit,
     update_factor_memory_from_validation_audit,
 )
 
@@ -512,6 +513,91 @@ def test_factor_memory_rejects_test_audit_ingestion(tmp_path):
         raise AssertionError("Expected test audit ingestion failure.")
 
 
+def test_factor_memory_ingests_backtest_success_and_dedupes(tmp_path):
+    memory_root = tmp_path / "outputs" / "factor_memory"
+    audit_path = tmp_path / "backtest_audit.json"
+    _write_backtest_audit(
+        audit_path,
+        factor_id=3,
+        factor_name="factor_range_strength",
+        domain_agent="alpha-range-vol",
+        outcome="backtest_success",
+        bottlenecks=[],
+        net_return=0.12,
+        rank_ic=0.03,
+    )
+
+    first = update_factor_memory_from_backtest_audit(
+        audit_path=audit_path,
+        memory_root=memory_root,
+    )
+    second = update_factor_memory_from_backtest_audit(
+        audit_path=audit_path,
+        memory_root=memory_root,
+    )
+
+    assert first.processed_audit_keys == ["backtest:3:unit-test"]
+    assert second.processed_audit_keys == []
+    memory = json.loads(
+        (memory_root / "domain_memory/alpha-range-vol.json").read_text(encoding="utf-8")
+    )
+    assert memory["backtest_counts"] == {
+        "backtest_success": 1,
+        "backtest_failure": 0,
+    }
+    assert "passed independent backtest" in memory["success_patterns"][0]["lesson"]
+    cache = (memory_root / "retrieval_cache/alpha-range-vol.md").read_text(
+        encoding="utf-8"
+    )
+    assert "factor_range_strength" in cache
+
+
+def test_factor_memory_ingests_backtest_failure_and_fallbacks_invalid_summary(tmp_path):
+    memory_root = tmp_path / "outputs" / "factor_memory"
+    audit_path = tmp_path / "backtest_audit.json"
+    _write_backtest_audit(
+        audit_path,
+        factor_id=4,
+        factor_name="factor_raw_volume_spike",
+        domain_agent="alpha-liquidity-shock",
+        outcome="backtest_failure",
+        bottlenecks=["rank_ic_mean", "transaction_cost"],
+        net_return=-0.02,
+        rank_ic=-0.01,
+    )
+    summarizer = FakeSummarizer(
+        result={
+            "success_patterns": [
+                {"lesson": "invented", "evidence_factor_ids": [999]},
+            ],
+            "failure_patterns": [
+                {"lesson": "invented", "evidence_factor_ids": [999]},
+            ],
+            "avoid_patterns": [],
+            "regime_hypotheses": [],
+        }
+    )
+
+    update_factor_memory_from_backtest_audit(
+        audit_path=audit_path,
+        memory_root=memory_root,
+        summarizer=summarizer,
+    )
+
+    memory = json.loads(
+        (memory_root / "domain_memory/alpha-liquidity-shock.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert memory["backtest_counts"]["backtest_failure"] == 1
+    assert memory["backtest_bottlenecks"] == {
+        "rank_ic_mean": 1,
+        "transaction_cost": 1,
+    }
+    assert "failed independent backtest" in memory["failure_patterns"][0]["lesson"]
+    assert "invented" not in json.dumps(memory)
+
+
 def _write_index(factor_pool, factors):
     payload = {
         "next_factor_id": max(entry["factor_id"] for entry in factors) + 1,
@@ -584,6 +670,55 @@ def _write_validation_audit(path, records, *, split="valid"):
                 },
                 "records": records,
                 "counts": {"total": len(records)},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_backtest_audit(
+    path,
+    *,
+    factor_id,
+    factor_name,
+    domain_agent,
+    outcome,
+    bottlenecks,
+    net_return,
+    rank_ic,
+):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "audit_id": f"backtest:{factor_id}:unit-test",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "factor_id": factor_id,
+                "factor_name": factor_name,
+                "candidate_id": f"candidate-{factor_id}",
+                "domain_agent": domain_agent,
+                "run_id": "run-1",
+                "pool": "qualified",
+                "data_version": "unit-test-data",
+                "start_date": "2021-01-01",
+                "end_date": "2022-12-31",
+                "outcome": outcome,
+                "bottlenecks": bottlenecks,
+                "summary": {
+                    "ic_mean": 0.02,
+                    "rank_ic_mean": rank_ic,
+                    "icir": 0.2,
+                    "rank_icir": 0.2,
+                    "mi": 0.03,
+                    "long_short_gross_annual_return": 0.15,
+                    "long_short_net_annual_return": net_return,
+                    "top_excess_annual_return": 0.08,
+                    "max_drawdown": -0.05,
+                    "avg_turnover": 0.3,
+                    "avg_coverage": 0.9,
+                },
+                "annual_metrics": [],
             },
             indent=2,
         ),

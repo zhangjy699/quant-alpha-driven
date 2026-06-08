@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from cogalpha.factor_pool import METRIC_FIELDS, POOL_NAMES, DEFAULT_FACTOR_POOL_ROOT
+from cogalpha.factor_pool import DEFAULT_FACTOR_POOL_ROOT, METRIC_FIELDS, POOL_NAMES
 from cogalpha.registry import PROJECT_ROOT
 from cogalpha.skill_invocation import SkillInvoker
 from cogalpha.skill_loader import StandardSkillLoader
@@ -58,6 +58,8 @@ class FactorMemoryEvidence(BaseModel):
     split: str | None = None
     validation_outcome: str | None = None
     validation_metrics: dict[str, float] = Field(default_factory=dict)
+    backtest_outcome: str | None = None
+    backtest_summary: dict[str, float] = Field(default_factory=dict)
 
 
 class FactorMemoryCompactionRequest(BaseModel):
@@ -119,6 +121,17 @@ class FactorMemoryUpdateResult:
 @dataclass(frozen=True)
 class FactorMemoryValidationUpdateResult:
     """Summary of one validation-audit memory update."""
+
+    audit_path: Path
+    memory_root: Path
+    processed_audit_keys: list[str]
+    domain_updates: dict[str, int]
+    state_path: Path
+
+
+@dataclass(frozen=True)
+class FactorMemoryBacktestUpdateResult:
+    """Summary of one backtest-audit memory update."""
 
     audit_path: Path
     memory_root: Path
@@ -281,6 +294,79 @@ def update_factor_memory_from_validation_audit(
     )
 
 
+def update_factor_memory_from_backtest_audit(
+    *,
+    audit_path: str | Path,
+    memory_root: str | Path = DEFAULT_FACTOR_MEMORY_ROOT,
+    summarizer: FactorMemorySummarizer | None = None,
+    max_patterns_per_kind: int = MAX_PATTERNS_PER_KIND,
+    allow_test_memory: bool = False,
+) -> FactorMemoryBacktestUpdateResult:
+    """Update compressed memory with independent backtest feedback."""
+
+    audit_file = Path(audit_path)
+    memory_path = Path(memory_root)
+    report = _read_json(audit_file)
+    if _looks_like_test_backtest(report) and not allow_test_memory:
+        raise ValueError("Test-like backtest audits must not update generation memory by default.")
+
+    state_path = memory_path / "state.json"
+    state = _load_memory_state(state_path)
+    processed_keys = set(state.get("processed_backtest_audit_keys", []))
+    audit_key = _backtest_audit_key(report)
+    newly_processed: list[str] = []
+    domain_updates: dict[str, int] = {}
+    evidence_by_domain: dict[str, list[FactorMemoryEvidence]] = {}
+
+    if audit_key not in processed_keys:
+        domain = str(report["domain_agent"])
+        memory = _load_domain_memory(memory_path, domain)
+        _update_domain_memory_from_backtest_record(
+            memory,
+            record=dict(report),
+            max_patterns_per_kind=max_patterns_per_kind,
+        )
+        evidence_by_domain.setdefault(domain, []).append(
+            _build_backtest_evidence(record=dict(report))
+        )
+        _write_domain_memory(memory_path, domain, memory)
+        processed_keys.add(audit_key)
+        newly_processed.append(audit_key)
+        domain_updates[domain] = 1
+
+    if summarizer is not None:
+        for domain, evidence in evidence_by_domain.items():
+            memory = _load_domain_memory(memory_path, domain)
+            compacted = _summarize_domain_memory(
+                memory,
+                evidence=evidence,
+                summarizer=summarizer,
+                max_patterns_per_kind=max_patterns_per_kind,
+            )
+            _write_domain_memory(memory_path, domain, compacted)
+
+    if newly_processed:
+        state["processed_backtest_audit_keys"] = sorted(processed_keys)
+        state["updated_at"] = _utc_now()
+        state["backtest_audit_count"] = (
+            int(state.get("backtest_audit_count", 0)) + len(newly_processed)
+        )
+        state["backtest_domain_updates"] = _merge_domain_updates(
+            dict(state.get("backtest_domain_updates", {})),
+            domain_updates,
+        )
+        _write_json(state_path, state)
+
+    _write_retrieval_caches(memory_path)
+    return FactorMemoryBacktestUpdateResult(
+        audit_path=audit_file,
+        memory_root=memory_path,
+        processed_audit_keys=newly_processed,
+        domain_updates=domain_updates,
+        state_path=state_path,
+    )
+
+
 def build_factor_memory_summarizer(
     client,
     *,
@@ -424,6 +510,47 @@ def _update_domain_memory_from_validation_record(
         _append_pattern(
             memory["avoid_patterns"],
             _validation_avoid_lesson(record, split),
+            factor_id,
+            max_patterns=max_patterns_per_kind,
+        )
+
+
+def _update_domain_memory_from_backtest_record(
+    memory: dict[str, Any],
+    *,
+    record: dict[str, Any],
+    max_patterns_per_kind: int,
+) -> None:
+    factor_id = int(record["factor_id"])
+    outcome = str(record["outcome"])
+    memory["updated_at"] = _utc_now()
+    memory["backtest_counts"][outcome] = (
+        int(memory["backtest_counts"].get(outcome, 0)) + 1
+    )
+
+    bottlenecks = list(record.get("bottlenecks") or [])
+    for item in bottlenecks:
+        memory["backtest_bottlenecks"][item] = (
+            int(memory["backtest_bottlenecks"].get(item, 0)) + 1
+        )
+
+    if outcome == "backtest_success":
+        _append_pattern(
+            memory["success_patterns"],
+            _backtest_success_lesson(record),
+            factor_id,
+            max_patterns=max_patterns_per_kind,
+        )
+    else:
+        _append_pattern(
+            memory["failure_patterns"],
+            _backtest_failure_lesson(record),
+            factor_id,
+            max_patterns=max_patterns_per_kind,
+        )
+        _append_pattern(
+            memory["avoid_patterns"],
+            _backtest_avoid_lesson(record),
             factor_id,
             max_patterns=max_patterns_per_kind,
         )
@@ -607,6 +734,29 @@ def _build_validation_evidence(
     )
 
 
+def _build_backtest_evidence(record: dict[str, Any]) -> FactorMemoryEvidence:
+    summary = {
+        key: float(value)
+        for key, value in dict(record.get("summary") or {}).items()
+        if isinstance(value, int | float) and value is not None
+    }
+    return FactorMemoryEvidence(
+        factor_id=int(record["factor_id"]),
+        pool=str(record["pool"]),
+        domain_agent=str(record["domain_agent"]),
+        factor_name=str(record["factor_name"]),
+        rationale=f"{record['factor_name']} independent backtest outcome.",
+        metrics={
+            field: summary[field]
+            for field in ("ic_mean", "rank_ic_mean", "icir", "rank_icir", "mi")
+            if field in summary
+        },
+        metric_bottlenecks=list(record.get("bottlenecks") or []),
+        backtest_outcome=str(record["outcome"]),
+        backtest_summary=summary,
+    )
+
+
 def _success_lesson(entry: dict[str, Any], factor: dict[str, Any], pool: str) -> str:
     factor_name = str(factor.get("factor_name") or entry["factor_name"])
     mechanism = _short_text(factor.get("rationale") or factor.get("formula") or factor_name)
@@ -662,6 +812,38 @@ def _validation_avoid_lesson(record: dict[str, Any], split: str) -> str:
     )
 
 
+def _backtest_success_lesson(record: dict[str, Any]) -> str:
+    factor_name = str(record["factor_name"])
+    summary = dict(record.get("summary") or {})
+    net_return = float(summary.get("long_short_net_annual_return", 0.0))
+    rank_ic = float(summary.get("rank_ic_mean", 0.0))
+    return (
+        f"{factor_name} passed independent backtest review; net long-short "
+        f"annual return was {net_return:.4f} and RankIC mean was {rank_ic:.4f}."
+    )
+
+
+def _backtest_failure_lesson(record: dict[str, Any]) -> str:
+    factor_name = str(record["factor_name"])
+    weak = _backtest_bottleneck_text(record)
+    return (
+        f"{factor_name} failed independent backtest review; weak diagnostics were {weak}."
+    )
+
+
+def _backtest_avoid_lesson(record: dict[str, Any]) -> str:
+    factor_name = str(record["factor_name"])
+    weak = _backtest_bottleneck_text(record)
+    return f"Avoid promoting {factor_name} without improving backtest diagnostics: {weak}."
+
+
+def _backtest_bottleneck_text(record: dict[str, Any]) -> str:
+    bottlenecks = list(record.get("bottlenecks") or [])
+    if bottlenecks:
+        return ", ".join(str(item) for item in bottlenecks)
+    return "net long-short return, RankIC, coverage, drawdown, or transaction costs"
+
+
 def _weak_metric_text(record: dict[str, Any]) -> str:
     bottlenecks = list(record.get("metric_bottlenecks") or [])
     if bottlenecks:
@@ -711,11 +893,17 @@ def _load_memory_state(path: Path) -> dict[str, Any]:
             "processed_validation_audit_keys": [],
             "validation_audit_count": 0,
             "validation_domain_updates": {},
+            "processed_backtest_audit_keys": [],
+            "backtest_audit_count": 0,
+            "backtest_domain_updates": {},
         }
     state = _read_json(path)
     state.setdefault("processed_validation_audit_keys", [])
     state.setdefault("validation_audit_count", 0)
     state.setdefault("validation_domain_updates", {})
+    state.setdefault("processed_backtest_audit_keys", [])
+    state.setdefault("backtest_audit_count", 0)
+    state.setdefault("backtest_domain_updates", {})
     return state
 
 
@@ -745,6 +933,11 @@ def _new_domain_memory(skill_name: str) -> dict[str, Any]:
             "validation_error": 0,
         },
         "validation_metric_bottlenecks": {},
+        "backtest_counts": {
+            "backtest_success": 0,
+            "backtest_failure": 0,
+        },
+        "backtest_bottlenecks": {},
     }
 
 
@@ -765,6 +958,14 @@ def _ensure_domain_memory_defaults(memory: dict[str, Any]) -> None:
         },
     )
     memory.setdefault("validation_metric_bottlenecks", {})
+    memory.setdefault(
+        "backtest_counts",
+        {
+            "backtest_success": 0,
+            "backtest_failure": 0,
+        },
+    )
+    memory.setdefault("backtest_bottlenecks", {})
 
 
 def _write_domain_memory(memory_root: Path, skill_name: str, memory: dict[str, Any]) -> None:
@@ -801,6 +1002,15 @@ def _merge_domain_updates(
 
 def _validation_audit_key(run_id: str, split: str, factor_id: int) -> str:
     return f"{run_id}:{split}:{factor_id}"
+
+
+def _backtest_audit_key(record: dict[str, Any]) -> str:
+    return str(record.get("audit_id") or f"backtest:{record['factor_id']}:{record['data_version']}")
+
+
+def _looks_like_test_backtest(record: dict[str, Any]) -> bool:
+    text = f"{record.get('start_date', '')}:{record.get('end_date', '')}".lower()
+    return str(record.get("split", "")).lower() == "test" or "test" in text
 
 
 def _short_text(value: object, limit: int = 220) -> str:

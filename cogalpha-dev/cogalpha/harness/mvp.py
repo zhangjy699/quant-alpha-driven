@@ -75,7 +75,7 @@ def _next_mvp_tool(state: CogAlphaState, config: MVPLoopConfig) -> str | None:
     if last_node == "fitness_gate":
         if state.generation >= config.max_generations - 1:
             return None
-        if not state.qualified_pool:
+        if not (state.parent_pool or state.qualified_pool):
             return None
         return "thinking_evolution.generate_children"
     if last_node == "thinking_evolution":

@@ -23,7 +23,7 @@ class SplitConfig(BaseModel):
 
 
 class FitnessGateConfig(BaseModel):
-    """Paper-defined threshold policy for CSI300."""
+    """Fitness threshold policy for the formal MVP route."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -47,6 +47,8 @@ class FitnessGateConfig(BaseModel):
             mi=0.02,
         )
     )
+    promising_parent_min_primary_metrics: int = Field(default=2, ge=0, le=4)
+    promising_parent_min_composite: float = 0.0
 
 
 class BaselineExperimentConfig(BaseModel):
@@ -54,7 +56,7 @@ class BaselineExperimentConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    dataset: str = "CSI300"
+    dataset: str = "company_all_a"
     horizon_days: int = 10
     return_price_column: OHLCVColumn = "open"
     trade_delay_days: int = Field(default=1, ge=0)

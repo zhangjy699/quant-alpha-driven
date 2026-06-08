@@ -104,6 +104,24 @@ class RejectingMetricsProvider:
         }
 
 
+class PromisingRejectingMetricsProvider:
+    def __init__(self) -> None:
+        self.evaluated_batches: list[list[str]] = []
+
+    def evaluate(self, candidates: Sequence[AlphaCandidate]):
+        self.evaluated_batches.append([candidate.candidate_id for candidate in candidates])
+        return {
+            candidate.candidate_id: FitnessMetrics(
+                ic=0.03,
+                rank_ic=-0.01,
+                icir=0.3,
+                rank_icir=-0.1,
+                mi=0.04,
+            )
+            for candidate in candidates
+        }
+
+
 class RejectingGuardPipeline:
     def __init__(self) -> None:
         self.checked: list[str] = []
@@ -283,3 +301,31 @@ def test_mvp_graph_early_stops_without_qualified_candidates():
     assert result.generation == 0
     assert len(metrics_provider.evaluated_batches) == 1
     assert result.candidates == []
+
+
+def test_mvp_graph_evolves_promising_rejected_parent_pool():
+    invoker = FakeMVPInvoker()
+    metrics_provider = PromisingRejectingMetricsProvider()
+    config = MVPLoopConfig(max_generations=2, parent_pool_size=2)
+    graph = build_mvp_graph(
+        invoker=invoker,
+        config=config,
+        metrics_provider=metrics_provider,
+    )
+
+    result = CogAlphaState.model_validate(graph.invoke(CogAlphaState().model_dump(mode="python")))
+
+    assert [entry.node_name for entry in result.node_history] == [
+        "domain_agents",
+        "quality_pipeline",
+        "fitness_gate",
+        "thinking_evolution",
+        "quality_pipeline",
+        "fitness_gate",
+    ]
+    assert result.qualified_pool == []
+    assert len(result.parent_pool) == 2
+    assert {candidate.stage for candidate in result.parent_pool} == {
+        CandidateStage.REJECTED_BY_FITNESS
+    }
+    assert len(metrics_provider.evaluated_batches) == 2

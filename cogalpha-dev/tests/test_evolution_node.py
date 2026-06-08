@@ -28,7 +28,7 @@ class FakeEvolutionInvoker:
 def test_evolution_node_generates_mutation_and_crossover_children():
     invoker = FakeEvolutionInvoker()
     node = EvolutionNode(invoker=invoker, config=MVPLoopConfig())
-    state = CogAlphaState(qualified_pool=[make_candidate("parent_a"), make_candidate("parent_b")])
+    state = CogAlphaState(parent_pool=[make_candidate("parent_a"), make_candidate("parent_b")])
 
     result = CogAlphaState.model_validate(node(state.model_dump(mode="python")))
 

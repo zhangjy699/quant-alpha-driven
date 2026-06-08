@@ -4,6 +4,7 @@ from cogalpha.candidate_lifecycle import (
     record_evolution_child,
     record_quality_rejection,
     select_parent_pool,
+    select_promising_rejected_parents,
 )
 from cogalpha.schemas import (
     AlphaCandidate,
@@ -80,6 +81,38 @@ def test_lifecycle_classifies_fitness_and_selects_parent_pool():
     ]
     assert [candidate.candidate_id for candidate in classification.rejected] == ["weak"]
     assert [candidate.candidate_id for candidate in parent_pool] == ["strong", "usable"]
+
+
+def test_lifecycle_uses_promising_rejected_only_for_parent_pool():
+    strong = make_candidate("strong")
+    promising = make_candidate("promising")
+    weak = make_candidate("weak")
+
+    classification = classify_candidates_by_fitness(
+        [strong, promising, weak],
+        [
+            make_decision("strong", CandidateStage.QUALIFIED, 0.2),
+            make_decision("promising", CandidateStage.REJECTED_BY_FITNESS, 0.03),
+            make_decision("weak", CandidateStage.REJECTED_BY_FITNESS, -0.1),
+        ],
+    )
+    promising_rejected = select_promising_rejected_parents(
+        classification.rejected,
+        min_primary_metrics=2,
+        min_composite_score=0.0,
+    )
+    parent_pool = select_parent_pool(
+        qualified=classification.qualified,
+        existing_elites=classification.elite,
+        promising_rejected=promising_rejected,
+        parent_pool_size=3,
+        elite_carry_forward=1,
+    )
+
+    assert [candidate.candidate_id for candidate in classification.qualified] == ["strong"]
+    assert [candidate.candidate_id for candidate in promising_rejected] == ["promising"]
+    assert [candidate.candidate_id for candidate in parent_pool] == ["strong", "promising"]
+    assert parent_pool[1].stage == CandidateStage.REJECTED_BY_FITNESS
 
 
 def test_lifecycle_records_evolution_child_with_original_crossover_parent_ids():

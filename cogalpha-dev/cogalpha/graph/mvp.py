@@ -164,6 +164,6 @@ def _route_after_fitness(state: dict[str, Any], config: MVPLoopConfig) -> str:
     parsed = CogAlphaState.model_validate(state)
     if parsed.generation >= config.max_generations - 1:
         return "end"
-    if not parsed.qualified_pool:
+    if not (parsed.parent_pool or parsed.qualified_pool):
         return "end"
     return "evolution"

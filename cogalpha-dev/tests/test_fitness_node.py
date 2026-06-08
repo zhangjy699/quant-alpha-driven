@@ -51,6 +51,7 @@ def test_fitness_gate_node_updates_pools_and_feedback():
 
     assert result.candidates == []
     assert [candidate.candidate_id for candidate in result.qualified_pool] == ["strong", "usable"]
+    assert [candidate.candidate_id for candidate in result.parent_pool] == ["strong", "usable"]
     assert [candidate.candidate_id for candidate in result.elite_pool] == ["strong"]
     assert result.rejected_pool[0].candidate_id == "weak"
     assert result.qualified_pool[0].stage == CandidateStage.ELITE
@@ -82,6 +83,25 @@ def test_fitness_gate_node_records_structured_evaluation_results():
     assert history.evaluation_results[1].guard_report is not None
     assert history.evaluation_results[1].error == "runtime guard failed"
     assert result.rejected_pool[-1].candidate_id == "bad"
+
+
+def test_fitness_gate_node_keeps_promising_rejected_out_of_qualified_pool():
+    candidate = make_candidate(
+        "rank_weak",
+        {"ic": 0.03, "rank_ic": -0.01, "icir": 0.3, "rank_icir": -0.1, "mi": 0.04},
+    )
+    config = MVPLoopConfig(parent_pool_size=2)
+    config.experiment.fitness_gate.qualified_percentile = 0.0
+    config.experiment.fitness_gate.elite_percentile = 1.0
+    node = FitnessGateNode(config=config)
+
+    result = CogAlphaState.model_validate(
+        node(CogAlphaState(candidates=[candidate]).model_dump(mode="python"))
+    )
+
+    assert result.qualified_pool == []
+    assert [candidate.candidate_id for candidate in result.parent_pool] == ["rank_weak"]
+    assert result.parent_pool[0].stage == CandidateStage.REJECTED_BY_FITNESS
 
 
 class StructuredMetricsProvider:

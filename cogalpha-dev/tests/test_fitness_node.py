@@ -85,6 +85,24 @@ def test_fitness_gate_node_records_structured_evaluation_results():
     assert result.rejected_pool[-1].candidate_id == "bad"
 
 
+def test_fitness_gate_node_attaches_fitness_direction_metadata():
+    candidate = make_candidate(
+        "directional",
+        {"ic": 0.03, "rank_ic": 0.03, "icir": 0.3, "rank_icir": 0.3, "mi": 0.04},
+    )
+    node = FitnessGateNode(
+        config=MVPLoopConfig(),
+        metrics_provider=DirectionalMetricsProvider(),
+    )
+
+    result = CogAlphaState.model_validate(
+        node(CogAlphaState(candidates=[candidate]).model_dump(mode="python"))
+    )
+
+    assert result.elite_pool[0].metadata["fitness_direction"] == -1
+    assert result.qualified_pool[0].metadata["fitness_direction"] == -1
+
+
 def test_fitness_gate_node_keeps_promising_rejected_out_of_qualified_pool():
     candidate = make_candidate(
         "rank_weak",
@@ -127,4 +145,16 @@ class StructuredMetricsProvider:
                 error="runtime guard failed",
                 data_version="unit-test-v1",
             ),
+        ]
+
+
+class DirectionalMetricsProvider:
+    def evaluate_candidates(self, candidates):
+        return [
+            CandidateEvaluationResult(
+                candidate_id=candidates[0].candidate_id,
+                metrics=FitnessMetrics(ic=0.03, rank_ic=0.03, icir=0.3, rank_icir=0.3, mi=0.04),
+                data_version="unit-test-v1",
+                fitness_direction=-1,
+            )
         ]

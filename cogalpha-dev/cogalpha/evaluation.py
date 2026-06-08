@@ -12,9 +12,8 @@ from typing import Any
 import pandas as pd
 
 from cogalpha.data import MarketDataSplit
-from cogalpha.execution import AlphaExecutionError, execute_alpha_candidate
 from cogalpha.fitness import compute_predictive_metrics
-from cogalpha.guards.alpha_runtime import run_runtime_alpha_code_guard
+from cogalpha.guards.alpha_runtime import run_runtime_alpha_code_guard_with_values
 from cogalpha.schemas import (
     AlphaCandidate,
     CandidateEvaluationResult,
@@ -22,6 +21,8 @@ from cogalpha.schemas import (
     GuardReport,
     GuardStatus,
 )
+
+FITNESS_DIRECTION_POLICY = "auto_flip_directional_metrics_v1"
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class EvaluationCacheRecord:
     metrics: FitnessMetrics | None
     guard_report: GuardReport | None
     error: str | None = None
+    fitness_direction: int = 1
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,7 @@ def build_evaluation_cache_key(
         "data_version": data_version,
         "split_name": split_name,
         "max_nan_fraction": max_nan_fraction,
+        "fitness_direction_policy": FITNESS_DIRECTION_POLICY,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -191,16 +194,18 @@ class PanelBackedMetricsProvider:
                         error=cached.error,
                         cache_hit=True,
                         data_version=cached.data_version,
+                        fitness_direction=cached.fitness_direction,
                     )
                 )
                 continue
 
             self.cache_hits_by_candidate_id[candidate.candidate_id] = False
-            guard_report = run_runtime_alpha_code_guard(
+            guard_result = run_runtime_alpha_code_guard_with_values(
                 candidate,
                 self.ohlcv_panel,
                 max_nan_fraction=self.max_nan_fraction,
             )
+            guard_report = guard_result.report
             self.guard_reports_by_candidate_id[candidate.candidate_id] = guard_report
             if guard_report.status == GuardStatus.FAIL:
                 self._cache_record(candidate, metrics=None, guard_report=guard_report)
@@ -215,35 +220,19 @@ class PanelBackedMetricsProvider:
                 )
                 continue
 
-            try:
-                factor_values = execute_alpha_candidate(candidate, self.ohlcv_panel)
-            except AlphaExecutionError as exc:
-                self.errors_by_candidate_id[candidate.candidate_id] = str(exc)
-                self._cache_record(
-                    candidate,
-                    metrics=None,
-                    guard_report=guard_report,
-                    error=str(exc),
-                )
-                results.append(
-                    CandidateEvaluationResult(
-                        candidate_id=candidate.candidate_id,
-                        guard_report=guard_report,
-                        error=str(exc),
-                        cache_hit=False,
-                        data_version=self.data_version,
-                    )
-                )
-                continue
-
-            metrics_by_id[candidate.candidate_id] = compute_predictive_metrics(
-                factor_values,
+            if guard_result.factor_values is None:
+                raise RuntimeError("Runtime guard passed without reusable factor values.")
+            raw_metrics = compute_predictive_metrics(
+                guard_result.factor_values,
                 self.forward_returns,
             )
+            metrics_by_id[candidate.candidate_id] = _choose_directional_metrics(raw_metrics)
+            fitness_direction = _fitness_direction(raw_metrics)
             self._cache_record(
                 candidate,
                 metrics=metrics_by_id[candidate.candidate_id],
                 guard_report=guard_report,
+                fitness_direction=fitness_direction,
             )
             results.append(
                 CandidateEvaluationResult(
@@ -252,6 +241,7 @@ class PanelBackedMetricsProvider:
                     guard_report=guard_report,
                     cache_hit=False,
                     data_version=self.data_version,
+                    fitness_direction=fitness_direction,
                 )
             )
 
@@ -274,6 +264,7 @@ class PanelBackedMetricsProvider:
         metrics: FitnessMetrics | None,
         guard_report: GuardReport | None,
         error: str | None = None,
+        fitness_direction: int = 1,
     ) -> None:
         if self.cache is None:
             return
@@ -291,6 +282,7 @@ class PanelBackedMetricsProvider:
             metrics=metrics,
             guard_report=guard_report,
             error=error,
+            fitness_direction=fitness_direction,
         )
         self.cache.put(record)
 
@@ -309,6 +301,7 @@ def _record_to_json(record: EvaluationCacheRecord) -> dict[str, Any]:
             else None
         ),
         "error": record.error,
+        "fitness_direction": record.fitness_direction,
     }
 
 
@@ -324,4 +317,31 @@ def _record_from_json(raw: dict[str, Any]) -> EvaluationCacheRecord:
         metrics=FitnessMetrics.model_validate(metrics) if metrics is not None else None,
         guard_report=GuardReport.model_validate(guard_report) if guard_report is not None else None,
         error=raw.get("error"),
+        fitness_direction=int(raw.get("fitness_direction", 1)),
     )
+
+
+def _choose_directional_metrics(metrics: FitnessMetrics) -> FitnessMetrics:
+    flipped = _flip_metric_direction(metrics)
+    if _direction_score(flipped) > _direction_score(metrics):
+        return flipped
+    return metrics
+
+
+def _fitness_direction(metrics: FitnessMetrics) -> int:
+    flipped = _flip_metric_direction(metrics)
+    return -1 if _direction_score(flipped) > _direction_score(metrics) else 1
+
+
+def _flip_metric_direction(metrics: FitnessMetrics) -> FitnessMetrics:
+    return FitnessMetrics(
+        ic=-metrics.ic,
+        rank_ic=-metrics.rank_ic,
+        icir=-metrics.icir,
+        rank_icir=-metrics.rank_icir,
+        mi=metrics.mi,
+    )
+
+
+def _direction_score(metrics: FitnessMetrics) -> float:
+    return metrics.ic + metrics.rank_ic + metrics.icir + metrics.rank_icir

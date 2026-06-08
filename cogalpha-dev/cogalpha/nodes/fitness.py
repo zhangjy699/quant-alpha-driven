@@ -47,8 +47,16 @@ class FitnessGateNode:
             for result in evaluation_results
             if result.metrics is not None
         }
+        direction_by_id = {
+            result.candidate_id: result.fitness_direction
+            for result in evaluation_results
+            if result.metrics is not None
+        }
         decisions = apply_fitness_gate(metrics_by_id, self.config.experiment.fitness_gate)
         classification = classify_candidates_by_fitness(candidates, decisions)
+        _attach_fitness_directions(classification.qualified, direction_by_id)
+        _attach_fitness_directions(classification.elite, direction_by_id)
+        _attach_fitness_directions(classification.rejected, direction_by_id)
 
         parsed.feedback = build_generation_feedback(
             generation=parsed.generation,
@@ -135,3 +143,13 @@ class FitnessGateNode:
             CandidateEvaluationResult(candidate_id=candidate_id, metrics=metrics)
             for candidate_id, metrics in metrics_by_id.items()
         ]
+
+
+def _attach_fitness_directions(
+    candidates: Sequence[AlphaCandidate],
+    direction_by_id: Mapping[str, int],
+) -> None:
+    for candidate in candidates:
+        direction = direction_by_id.get(candidate.candidate_id)
+        if direction is not None:
+            candidate.metadata["fitness_direction"] = direction

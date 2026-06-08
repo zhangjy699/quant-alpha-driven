@@ -237,6 +237,7 @@ class CandidateEvaluationResult(BaseModel):
     error: str | None = None
     cache_hit: bool = False
     data_version: str | None = None
+    fitness_direction: int = Field(default=1, ge=-1, le=1)
 
 
 class FeedbackSample(BaseModel):

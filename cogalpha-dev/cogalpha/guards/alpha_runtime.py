@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
 from cogalpha.execution import AlphaExecutionError, execute_alpha_candidate
 from cogalpha.schemas import AlphaCandidate, GuardIssue, GuardReport, GuardStatus
+
+
+@dataclass(frozen=True)
+class RuntimeAlphaGuardResult:
+    """Runtime guard report plus reusable factor values when execution succeeds."""
+
+    report: GuardReport
+    factor_values: pd.DataFrame | None = None
 
 
 def run_runtime_alpha_code_guard(
@@ -16,19 +26,35 @@ def run_runtime_alpha_code_guard(
 ) -> GuardReport:
     """Execute an AlphaCandidate and reject unstable numerical outputs."""
 
+    return run_runtime_alpha_code_guard_with_values(
+        candidate,
+        ohlcv_panel,
+        max_nan_fraction=max_nan_fraction,
+    ).report
+
+
+def run_runtime_alpha_code_guard_with_values(
+    candidate: AlphaCandidate,
+    ohlcv_panel: pd.DataFrame,
+    max_nan_fraction: float = 0.30,
+) -> RuntimeAlphaGuardResult:
+    """Execute an AlphaCandidate once and return guard status plus factor values."""
+
     try:
         factor_values = execute_alpha_candidate(candidate, ohlcv_panel)
     except AlphaExecutionError as exc:
-        return GuardReport(
-            guard_name="runtime_alpha_code",
-            status=GuardStatus.FAIL,
-            issues=[
-                GuardIssue(
-                    code="runtime_error",
-                    message=str(exc),
-                    location=candidate.candidate_id,
-                )
-            ],
+        return RuntimeAlphaGuardResult(
+            report=GuardReport(
+                guard_name="runtime_alpha_code",
+                status=GuardStatus.FAIL,
+                issues=[
+                    GuardIssue(
+                        code="runtime_error",
+                        message=str(exc),
+                        location=candidate.candidate_id,
+                    )
+                ],
+            ),
         )
 
     issues: list[GuardIssue] = []
@@ -80,17 +106,20 @@ def run_runtime_alpha_code_guard(
             )
 
     status = GuardStatus.FAIL if issues else GuardStatus.PASS
-    return GuardReport(
-        guard_name="runtime_alpha_code",
-        status=status,
-        issues=issues,
-        metadata={
-            "rows": int(numeric_values.shape[0]),
-            "assets": int(numeric_values.shape[1]),
-            "evaluated_count": int(total_count),
-            "nan_fraction": float(nan_fraction),
-            "inf_count": int(inf_count),
-        },
+    return RuntimeAlphaGuardResult(
+        report=GuardReport(
+            guard_name="runtime_alpha_code",
+            status=status,
+            issues=issues,
+            metadata={
+                "rows": int(numeric_values.shape[0]),
+                "assets": int(numeric_values.shape[1]),
+                "evaluated_count": int(total_count),
+                "nan_fraction": float(nan_fraction),
+                "inf_count": int(inf_count),
+            },
+        ),
+        factor_values=factor_values,
     )
 
 

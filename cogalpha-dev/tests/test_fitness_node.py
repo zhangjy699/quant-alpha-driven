@@ -100,6 +100,7 @@ def test_fitness_gate_node_attaches_fitness_direction_metadata():
     )
 
     assert result.elite_pool[0].metadata["fitness_direction"] == -1
+    assert result.elite_pool[0].metadata["raw_fitness_metrics"]["rank_ic"] == -0.03
     assert result.qualified_pool[0].metadata["fitness_direction"] == -1
 
 
@@ -154,6 +155,13 @@ class DirectionalMetricsProvider:
             CandidateEvaluationResult(
                 candidate_id=candidates[0].candidate_id,
                 metrics=FitnessMetrics(ic=0.03, rank_ic=0.03, icir=0.3, rank_icir=0.3, mi=0.04),
+                raw_metrics=FitnessMetrics(
+                    ic=-0.03,
+                    rank_ic=-0.03,
+                    icir=-0.3,
+                    rank_icir=-0.3,
+                    mi=0.04,
+                ),
                 data_version="unit-test-v1",
                 fitness_direction=-1,
             )

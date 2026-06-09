@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from cogalpha.config import MVPLoopConfig
 from cogalpha.fitness import composite_fitness_score
 from cogalpha.schemas import (
     AlphaCandidate,
@@ -193,10 +194,18 @@ def _is_promising_rejected_parent(
     metrics = candidate_metrics(candidate)
     if metrics is None:
         return False
-    primary_passes = sum(1 for field in PRIMARY_FITNESS_FIELDS if getattr(metrics, field) > 0)
+    minima = MVPLoopConfig().experiment.fitness_gate.qualified_minima
+    primary_passes = sum(
+        1
+        for field in PRIMARY_FITNESS_FIELDS
+        if float(getattr(metrics, field)) >= float(getattr(minima, field))
+    )
     return (
         primary_passes >= min_primary_metrics
-        and composite_fitness_score(metrics) > min_composite_score
+        and (
+            min_composite_score <= 0
+            or composite_fitness_score(metrics) >= min_composite_score
+        )
     )
 
 

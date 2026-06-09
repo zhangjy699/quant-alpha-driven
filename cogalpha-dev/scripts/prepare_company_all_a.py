@@ -67,7 +67,7 @@ def main() -> None:
        description="Build company All-A Qlib-style raw files from DB chunks."
    )
    parser.add_argument("--start-date", default="2018-01-01")
-   parser.add_argument("--end-date", default="2024-12-01")
+   parser.add_argument("--end-date", default="2026-06-01")
    parser.add_argument("--raw-dir", default="data/raw/company_all_a")
    parser.add_argument("--chunk", choices=["monthly", "quarterly"], default="quarterly")
    parser.add_argument("--refresh", action="store_true")

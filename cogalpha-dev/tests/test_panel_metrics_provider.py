@@ -72,7 +72,9 @@ def test_panel_backed_metrics_provider_normalizes_negative_factor_direction():
 
     assert result.fitness_direction == -1
     assert result.metrics is not None
+    assert result.raw_metrics is not None
     assert result.metrics.rank_ic == pytest.approx(1.0)
+    assert result.raw_metrics.rank_ic == pytest.approx(-1.0)
     assert result.metrics.ic > 0
 
 

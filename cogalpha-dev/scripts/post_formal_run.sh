@@ -12,7 +12,7 @@ Options:
   --split NAME               Validation split. Default: valid
   --factor-pool PATH         Shared factor pool root. Default: outputs/factor_pool
   --memory-root PATH         Factor memory root. Default: outputs/factor_memory
-  --rejected-limit N         Worst rejected_by_fitness exports. Default: 3
+  --rejected-limit N         Selected rejected_by_fitness exports. Default: 8
   --use-llm-summarizer       Enable bounded LLM memory summarization.
   --inline-references        Inline skill references for summarizer calls.
   --python CMD               Python command. Default: python
@@ -25,7 +25,7 @@ DATA_DIR="data/processed/company_all_a"
 SPLIT="valid"
 FACTOR_POOL="outputs/factor_pool"
 MEMORY_ROOT="outputs/factor_memory"
-REJECTED_LIMIT="3"
+REJECTED_LIMIT="8"
 PYTHON_CMD="${PYTHON:-python}"
 USE_LLM_SUMMARIZER=0
 INLINE_REFERENCES=0
@@ -118,10 +118,23 @@ if [[ "$HAVE_EXTRA_VALIDATE_ARGS" -eq 1 ]]; then
   VALIDATE_ARGS+=("${EXTRA_VALIDATE_ARGS[@]}")
 fi
 
+MEMORY_ARGS=(
+  --factor-pool "$FACTOR_POOL"
+  --memory-root "$MEMORY_ROOT"
+)
+if [[ "$USE_LLM_SUMMARIZER" -eq 1 ]]; then
+  MEMORY_ARGS+=(--use-llm-summarizer)
+fi
+if [[ "$INLINE_REFERENCES" -eq 1 ]]; then
+  MEMORY_ARGS+=(--inline-references)
+fi
+
 "$PYTHON_CMD" scripts/export_factor_pool.py \
   --run-dir "$RUN_DIR" \
   --output-root "$FACTOR_POOL" \
   --rejected-limit "$REJECTED_LIMIT"
+
+"$PYTHON_CMD" scripts/update_factor_memory.py "${MEMORY_ARGS[@]}"
 
 "$PYTHON_CMD" scripts/validate_qualified_factors.py "${VALIDATE_ARGS[@]}"
 

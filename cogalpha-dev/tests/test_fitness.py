@@ -40,3 +40,37 @@ def test_apply_fitness_gate_uses_percentiles_and_minima():
     assert stages["strong"] == CandidateStage.ELITE
     assert stages["usable"] == CandidateStage.QUALIFIED
     assert stages["weak"] == CandidateStage.REJECTED_BY_FITNESS
+
+
+def test_qualified_gate_uses_minima_and_composite_percentile():
+    decisions = apply_fitness_gate(
+        {
+            "balanced": FitnessMetrics(
+                ic=0.02,
+                rank_ic=0.02,
+                icir=0.20,
+                rank_icir=0.20,
+                mi=0.02,
+            ),
+            "lopsided": FitnessMetrics(
+                ic=0.05,
+                rank_ic=0.011,
+                icir=0.40,
+                rank_icir=0.081,
+                mi=0.006,
+            ),
+            "below_minima": FitnessMetrics(
+                ic=0.20,
+                rank_ic=0.001,
+                icir=0.50,
+                rank_icir=0.50,
+                mi=0.05,
+            ),
+        },
+        FitnessGateConfig(qualified_percentile=0.5, elite_percentile=1.0),
+    )
+
+    stages = {decision.candidate_id: decision.stage for decision in decisions}
+    assert stages["balanced"] == CandidateStage.REJECTED_BY_FITNESS
+    assert stages["lopsided"] == CandidateStage.QUALIFIED
+    assert stages["below_minima"] == CandidateStage.REJECTED_BY_FITNESS

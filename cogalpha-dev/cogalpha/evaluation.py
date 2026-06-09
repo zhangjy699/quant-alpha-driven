@@ -22,7 +22,7 @@ from cogalpha.schemas import (
     GuardStatus,
 )
 
-FITNESS_DIRECTION_POLICY = "auto_flip_directional_metrics_v1"
+FITNESS_DIRECTION_POLICY = "auto_flip_directional_metrics_v2"
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ class EvaluationCacheRecord:
     split_name: str | None
     metrics: FitnessMetrics | None
     guard_report: GuardReport | None
+    raw_metrics: FitnessMetrics | None = None
     error: str | None = None
     fitness_direction: int = 1
 
@@ -190,6 +191,7 @@ class PanelBackedMetricsProvider:
                     CandidateEvaluationResult(
                         candidate_id=candidate.candidate_id,
                         metrics=cached.metrics,
+                        raw_metrics=cached.raw_metrics,
                         guard_report=cached.guard_report,
                         error=cached.error,
                         cache_hit=True,
@@ -231,6 +233,7 @@ class PanelBackedMetricsProvider:
             self._cache_record(
                 candidate,
                 metrics=metrics_by_id[candidate.candidate_id],
+                raw_metrics=raw_metrics,
                 guard_report=guard_report,
                 fitness_direction=fitness_direction,
             )
@@ -238,6 +241,7 @@ class PanelBackedMetricsProvider:
                 CandidateEvaluationResult(
                     candidate_id=candidate.candidate_id,
                     metrics=metrics_by_id[candidate.candidate_id],
+                    raw_metrics=raw_metrics,
                     guard_report=guard_report,
                     cache_hit=False,
                     data_version=self.data_version,
@@ -263,6 +267,7 @@ class PanelBackedMetricsProvider:
         *,
         metrics: FitnessMetrics | None,
         guard_report: GuardReport | None,
+        raw_metrics: FitnessMetrics | None = None,
         error: str | None = None,
         fitness_direction: int = 1,
     ) -> None:
@@ -280,6 +285,7 @@ class PanelBackedMetricsProvider:
             data_version=self.data_version,
             split_name=self.split_name,
             metrics=metrics,
+            raw_metrics=raw_metrics,
             guard_report=guard_report,
             error=error,
             fitness_direction=fitness_direction,
@@ -295,6 +301,11 @@ def _record_to_json(record: EvaluationCacheRecord) -> dict[str, Any]:
         "data_version": record.data_version,
         "split_name": record.split_name,
         "metrics": record.metrics.model_dump(mode="json") if record.metrics is not None else None,
+        "raw_metrics": (
+            record.raw_metrics.model_dump(mode="json")
+            if record.raw_metrics is not None
+            else None
+        ),
         "guard_report": (
             record.guard_report.model_dump(mode="json")
             if record.guard_report is not None
@@ -307,6 +318,7 @@ def _record_to_json(record: EvaluationCacheRecord) -> dict[str, Any]:
 
 def _record_from_json(raw: dict[str, Any]) -> EvaluationCacheRecord:
     metrics = raw.get("metrics")
+    raw_metrics = raw.get("raw_metrics")
     guard_report = raw.get("guard_report")
     return EvaluationCacheRecord(
         cache_key=raw["cache_key"],
@@ -315,6 +327,11 @@ def _record_from_json(raw: dict[str, Any]) -> EvaluationCacheRecord:
         data_version=raw["data_version"],
         split_name=raw.get("split_name"),
         metrics=FitnessMetrics.model_validate(metrics) if metrics is not None else None,
+        raw_metrics=(
+            FitnessMetrics.model_validate(raw_metrics)
+            if raw_metrics is not None
+            else None
+        ),
         guard_report=GuardReport.model_validate(guard_report) if guard_report is not None else None,
         error=raw.get("error"),
         fitness_direction=int(raw.get("fitness_direction", 1)),

@@ -24,8 +24,11 @@ def main() -> None:
     parser.add_argument(
         "--rejected-limit",
         type=int,
-        default=3,
-        help="Number of worst rejected_by_fitness factors to export.",
+        default=8,
+        help=(
+            "Number of selected rejected_by_fitness factors to export, "
+            "mixing weak and promising rejected samples."
+        ),
     )
     parser.add_argument(
         "--output-root",

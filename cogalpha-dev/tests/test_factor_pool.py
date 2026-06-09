@@ -23,6 +23,7 @@ def test_factor_pool_exports_shared_numeric_files_and_minimal_summaries(tmp_path
         CandidateStage.ELITE,
         agent_skill="alpha-market-cycle",
         score=0.3,
+        fitness_direction=-1,
     )
     qualified_elite_duplicate = elite.model_copy(deep=True)
     qualified = _candidate(
@@ -85,6 +86,8 @@ def test_factor_pool_exports_shared_numeric_files_and_minimal_summaries(tmp_path
     assert set(summary) == FACTOR_SUMMARY_FIELDS
     assert summary["run_id"] == "formal-mvp-test"
     assert summary["factor_name"] == "factor_duplicate_name"
+    assert summary["fitness_direction"] == -1
+    assert summary["raw_metrics"] is None
     assert summary["metrics"] == {
         "ic": 0.3,
         "rank_ic": 0.3,
@@ -107,8 +110,44 @@ def test_factor_pool_exports_shared_numeric_files_and_minimal_summaries(tmp_path
     }
     assert [entry["candidate_id"] for entry in index["factors"][-3:]] == [
         "reject-2",
+        "reject-1",
         "reject-4",
-        "reject-3",
+    ]
+
+
+def test_factor_pool_exports_worst_and_promising_rejected_samples(tmp_path):
+    run_dir = tmp_path / "formal-mvp-test"
+    output_root = tmp_path / "outputs" / "factor_pool"
+    run_dir.mkdir()
+    rejected = [
+        _candidate(
+            f"reject-{index}",
+            f"factor_reject_{index}",
+            CandidateStage.REJECTED_BY_FITNESS,
+            agent_skill="alpha-reversal",
+            score=score,
+        )
+        for index, score in enumerate([-0.4, -0.2, 0.0, 0.03, 0.05, 0.1], start=1)
+    ]
+    state = CogAlphaState(
+        metadata={"run_id": "formal-mvp-test", "split": "valid"},
+        rejected_pool=rejected,
+        node_history=[DAGNodeResult(node_name="fitness_gate", candidates=rejected)],
+    )
+    (run_dir / "final_state.json").write_text(
+        state.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    result = export_factor_pool(run_dir, output_root=output_root, rejected_limit=4)
+
+    assert result.counts == {"elite": 0, "qualified": 0, "rejected": 4}
+    index = json.loads((output_root / "index.json").read_text(encoding="utf-8"))
+    assert [entry["candidate_id"] for entry in index["factors"]] == [
+        "reject-1",
+        "reject-2",
+        "reject-6",
+        "reject-5",
     ]
 
 
@@ -249,8 +288,10 @@ def _candidate(
     parent_ids: list[str] | None = None,
     generation: int = 0,
     operation: EvolutionOperation | None = None,
+    fitness_direction: int = 1,
 ) -> AlphaCandidate:
     metadata = {}
+    metadata["fitness_direction"] = fitness_direction
     if score is not None:
         metadata["fitness_metrics"] = FitnessMetrics(
             ic=score,

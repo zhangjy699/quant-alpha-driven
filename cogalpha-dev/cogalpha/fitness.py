@@ -57,10 +57,11 @@ def apply_fitness_gate(
     if not candidate_metrics:
         return []
 
-    qualified_thresholds = _thresholds(
+    qualified_thresholds = config.qualified_minima
+    qualified_composite_threshold = _composite_threshold(
         candidate_metrics,
         config.qualified_percentile,
-        config.qualified_minima,
+        minima=config.qualified_minima,
     )
     elite_thresholds = _thresholds(
         candidate_metrics,
@@ -72,7 +73,11 @@ def apply_fitness_gate(
     for candidate_id, metrics in candidate_metrics.items():
         if _passes(metrics, elite_thresholds):
             stage = CandidateStage.ELITE
-        elif _passes(metrics, qualified_thresholds):
+        elif _passes_qualified_gate(
+            metrics,
+            minima=qualified_thresholds,
+            composite_threshold=qualified_composite_threshold,
+        ):
             stage = CandidateStage.QUALIFIED
         else:
             stage = CandidateStage.REJECTED_BY_FITNESS
@@ -167,3 +172,28 @@ def _thresholds(
 
 def _passes(metrics: FitnessMetrics, thresholds: FitnessMetrics) -> bool:
     return all(getattr(metrics, field) >= getattr(thresholds, field) for field in METRIC_FIELDS)
+
+
+def _composite_threshold(
+    candidate_metrics: Mapping[str, FitnessMetrics],
+    percentile: float,
+    *,
+    minima: FitnessMetrics,
+) -> float:
+    eligible_scores = [
+        composite_fitness_score(metrics)
+        for metrics in candidate_metrics.values()
+        if _passes(metrics, minima)
+    ]
+    if not eligible_scores:
+        return float("inf")
+    return float(np.quantile(eligible_scores, percentile))
+
+
+def _passes_qualified_gate(
+    metrics: FitnessMetrics,
+    *,
+    minima: FitnessMetrics,
+    composite_threshold: float,
+) -> bool:
+    return _passes(metrics, minima) and composite_fitness_score(metrics) >= composite_threshold

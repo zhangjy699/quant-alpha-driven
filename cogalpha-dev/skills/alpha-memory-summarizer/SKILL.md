@@ -12,6 +12,9 @@ Compact a small, preselected evidence batch into concise domain-agent lessons. T
 ## Inputs
 
 - Runtime payload assembled by the memory updater, including domain_agent, new_evidence, existing patterns, metric_bottlenecks, and max_patterns_per_kind.
+- Rejected factor evidence may include `rejection_profile`:
+  - `near_miss_rejected`: rejected by the full gate, but close to the qualified minima or blocked by only a small number of bottlenecks; treat it as a potential improvement direction.
+  - `weak_rejected`: broadly weak or unstable rejected evidence, mainly useful for failure and avoid lessons.
 - [Metric Objectives](../references/metric-objectives.md) for interpreting IC, RankIC, ICIR, RankICIR, and MI.
 - [Factor Memory](../references/factor-memory.md) for evidence bounds, validation feedback, regime hypotheses, and retrieval constraints.
 
@@ -20,9 +23,11 @@ Compact a small, preselected evidence batch into concise domain-agent lessons. T
 1. Observe only the provided bounded evidence and existing patterns.
 2. Merge duplicate or near-duplicate lessons while preserving distinct mechanisms.
 3. Prefer lessons that explain why a mechanism succeeded or failed across the five-metric gate.
-4. Preserve evidence_factor_ids from the input evidence for every lesson or hypothesis.
-5. Keep lessons short, operational, and mechanism-level.
-6. Write regime hypotheses only as weak hypotheses, never as trading instructions.
+4. For `near_miss_rejected` evidence, summarize the mechanism as an improvement direction: preserve the useful part, name the bottleneck, and avoid treating it as a pure discard.
+5. For `weak_rejected` evidence, summarize concrete failure modes and avoid patterns.
+6. Preserve evidence_factor_ids from the input evidence for every lesson or hypothesis.
+7. Keep lessons short, operational, and mechanism-level.
+8. Write regime hypotheses only as weak hypotheses, never as trading instructions.
 
 ## Anti-Leakage Rules
 
@@ -31,6 +36,8 @@ Compact a small, preselected evidence batch into concise domain-agent lessons. T
 - Do not recommend changing validation thresholds, fitness gates, or data splits to make factors pass.
 - Do not issue parameter-tuning instructions such as "set window to 17"; write mechanism-level lessons instead.
 - Do not copy full factor code into lessons.
+- Do not convert a `near_miss_rejected` factor into a blanket avoid lesson unless the evidence also shows broad metric failure.
+- Do not treat `weak_rejected` evidence as a success pattern.
 - Do not assert a market regime as fact. Regime hypotheses must include uncertainty and risk.
 - Do not tell future agents to conform to a market style; hypotheses are inspiration only.
 
@@ -58,13 +65,13 @@ Return JSON only, compatible with FactorMemoryCompactionResult:
   ],
   "failure_patterns": [
     {
-      "lesson": "Raw range spikes failed RankICIR despite nonzero IC.",
+      "lesson": "Near-miss range-volatility signals were close to the qualified minima but failed rank stability; preserve normalization while improving RankICIR.",
       "evidence_factor_ids": [3, 8]
     }
   ],
   "avoid_patterns": [
     {
-      "lesson": "Avoid unnormalized high-low amplitude when rank stability is weak.",
+      "lesson": "Avoid repeating weak rejected raw high-low amplitude without normalization or rank-stability controls.",
       "evidence_factor_ids": [3, 8]
     }
   ],

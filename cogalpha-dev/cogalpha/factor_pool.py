@@ -8,12 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cogalpha.config import MVPLoopConfig
 from cogalpha.registry import DOMAIN_AGENT_SPECS
 from cogalpha.schemas import AlphaCandidate, CandidateStage, CogAlphaState, FitnessMetrics
 
 UNKNOWN_DOMAIN = "unknown_domain"
 POOL_NAMES = ("elite", "qualified", "rejected")
 METRIC_FIELDS = ("ic", "rank_ic", "icir", "rank_icir", "mi")
+PROMISING_REJECTED_MAX_BOTTLENECKS = 2
 DEFAULT_FACTOR_POOL_ROOT = Path("outputs/factor_pool")
 FACTOR_SUMMARY_FIELDS = {
     "run_id",
@@ -23,6 +25,8 @@ FACTOR_SUMMARY_FIELDS = {
     "rationale",
     "required_columns",
     "allowed_libraries",
+    "fitness_direction",
+    "raw_metrics",
     "metrics",
 }
 
@@ -115,6 +119,8 @@ def build_factor_summary(
         "rationale": candidate.alpha.rationale,
         "required_columns": list(candidate.alpha.required_columns),
         "allowed_libraries": list(candidate.alpha.allowed_libraries),
+        "fitness_direction": int(candidate.metadata.get("fitness_direction", 1)),
+        "raw_metrics": _candidate_raw_metrics(candidate),
         "metrics": None if metrics is None else metrics.model_dump(mode="json"),
     }
 
@@ -138,16 +144,12 @@ def _select_pool_candidates(
     rejected_limit: int,
 ) -> dict[str, list[AlphaCandidate]]:
     elite_ids = {candidate.candidate_id for candidate in state.elite_pool}
-    rejected = [
+    rejected_candidates = [
         candidate
         for candidate in state.rejected_pool
         if candidate.stage == CandidateStage.REJECTED_BY_FITNESS
         and _candidate_metrics(candidate) is not None
     ]
-    rejected = sorted(
-        rejected,
-        key=lambda candidate: composite_fitness_score(_candidate_metrics(candidate)),
-    )
     return {
         "elite": list(state.elite_pool),
         "qualified": [
@@ -155,8 +157,61 @@ def _select_pool_candidates(
             for candidate in state.qualified_pool
             if candidate.candidate_id not in elite_ids
         ],
-        "rejected": rejected[:rejected_limit],
+        "rejected": _select_rejected_exports(
+            rejected_candidates,
+            rejected_limit=rejected_limit,
+        ),
     }
+
+
+def _select_rejected_exports(
+    candidates: list[AlphaCandidate],
+    *,
+    rejected_limit: int,
+) -> list[AlphaCandidate]:
+    if rejected_limit <= 0:
+        return []
+
+    worst = sorted(
+        candidates,
+        key=lambda candidate: composite_fitness_score(_candidate_metrics(candidate)),
+    )
+    promising = sorted(
+        [candidate for candidate in candidates if _is_promising_rejected(candidate)],
+        key=lambda candidate: composite_fitness_score(_candidate_metrics(candidate)),
+        reverse=True,
+    )
+
+    worst_limit = max(1, rejected_limit // 2)
+    promising_limit = rejected_limit - worst_limit
+    selected = _dedupe_by_candidate_id(
+        [*worst[:worst_limit], *promising[:promising_limit]]
+    )
+
+    if len(selected) < rejected_limit:
+        selected = _dedupe_by_candidate_id([*selected, *worst, *promising])
+    return selected[:rejected_limit]
+
+
+def _is_promising_rejected(candidate: AlphaCandidate) -> bool:
+    metrics = _candidate_metrics(candidate)
+    if metrics is None:
+        return False
+    return (
+        len(_qualified_minima_bottlenecks(metrics))
+        <= PROMISING_REJECTED_MAX_BOTTLENECKS
+    )
+
+
+def _dedupe_by_candidate_id(candidates: list[AlphaCandidate]) -> list[AlphaCandidate]:
+    selected: list[AlphaCandidate] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate.candidate_id in seen:
+            continue
+        seen.add(candidate.candidate_id)
+        selected.append(candidate)
+    return selected
 
 
 def _all_candidates(state: CogAlphaState) -> list[AlphaCandidate]:
@@ -256,12 +311,28 @@ def _candidate_metrics(candidate: AlphaCandidate) -> FitnessMetrics | None:
     return FitnessMetrics.model_validate(raw_metrics)
 
 
+def _candidate_raw_metrics(candidate: AlphaCandidate) -> dict[str, Any] | None:
+    raw_metrics = candidate.metadata.get("raw_fitness_metrics")
+    if raw_metrics is None:
+        return None
+    return FitnessMetrics.model_validate(raw_metrics).model_dump(mode="json")
+
+
 def composite_fitness_score(metrics: FitnessMetrics | None) -> float:
     """Return the project convention used for simple factor ordering."""
 
     if metrics is None:
         return float("-inf")
     return float(sum(getattr(metrics, field) for field in METRIC_FIELDS))
+
+
+def _qualified_minima_bottlenecks(metrics: FitnessMetrics) -> list[str]:
+    minima = MVPLoopConfig().experiment.fitness_gate.qualified_minima
+    return [
+        field
+        for field in METRIC_FIELDS
+        if float(getattr(metrics, field)) < float(getattr(minima, field))
+    ]
 
 
 def _safe_path_component(value: str) -> str:

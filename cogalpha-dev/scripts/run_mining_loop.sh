@@ -10,7 +10,7 @@ Options:
   --target-qualified-count N       Stop when factor_pool has this many elite+qualified factors. Default: 50
   --max-runs N                     Maximum formal runs to launch. Default: 100
   --sleep-seconds N                Pause between runs. Default: 0
-  --summarizer-every N             Enable LLM summarizer every N post runs. Default: 5
+  --summarizer-every N             Enable LLM summarizer every N post runs. Default: 1
   --run-prefix TEXT                Run ID prefix. Default: formal-mvp-loop
   --data-dir PATH                  Prepared data directory. Default: data/processed/company_all_a
   --run-output-root PATH           Formal run output root. Default: outputs/experiments
@@ -26,13 +26,6 @@ Options:
   --max-repair-attempts N          Formal run max repair attempts. Default: 2
   --python CMD                     Python command. Default: python
   --post-script PATH               Post-run script path. Default: scripts/post_formal_run.sh
-  --backtest-script PATH           Backtest worker script path. Default: scripts/backtest_factor_pool_run.py
-  --backtest-ingest-script PATH    Backtest audit ingest script. Default: scripts/ingest_backtest_audits.py
-  --no-backtest                    Do not launch async backtests after post-run export.
-  --backtest-pools LIST            Comma-separated pools. Default: elite,qualified
-  --backtest-cost-bps N            Transaction cost in bps. Default: 10
-  --backtest-output-root PATH      Backtest output root. Default: outputs/backtests
-  --backtest-use-llm-summarizer    Use LLM summarizer when ingesting completed audits.
   --no-factor-memory               Do not inject factor_memory into formal run prompts.
   --inline-references              Inline skill references. Default: enabled
   --no-inline-references           Disable inlined skill references.
@@ -41,10 +34,10 @@ Options:
 USAGE
 }
 
-TARGET_QUALIFIED_COUNT=3
+TARGET_QUALIFIED_COUNT=30
 MAX_RUNS=3
 SLEEP_SECONDS=30
-SUMMARIZER_EVERY=2
+SUMMARIZER_EVERY=1
 RUN_PREFIX="formal-mvp-loop"
 DATA_DIR="data/processed/company_all_a"
 RUN_OUTPUT_ROOT="outputs/experiments"
@@ -56,17 +49,10 @@ VALIDATION_SPLIT="valid"
 AGENT_LIMIT=21
 MAX_GENERATIONS=2
 ALPHAS_PER_AGENT=1
-PARENT_POOL_SIZE=4
+PARENT_POOL_SIZE=8
 MAX_REPAIR_ATTEMPTS=1
 PYTHON_CMD="${PYTHON:-python}"
 POST_SCRIPT="scripts/post_formal_run.sh"
-BACKTEST_SCRIPT="scripts/backtest_factor_pool_run.py"
-BACKTEST_INGEST_SCRIPT="scripts/ingest_backtest_audits.py"
-ENABLE_BACKTEST=1
-BACKTEST_POOLS="elite,qualified"
-BACKTEST_COST_BPS=10
-BACKTEST_OUTPUT_ROOT="outputs/backtests"
-BACKTEST_USE_LLM_SUMMARIZER=0
 USE_FACTOR_MEMORY=1
 INLINE_REFERENCES=1
 HAVE_EXTRA_RUN_ARGS=0
@@ -149,34 +135,6 @@ while [[ $# -gt 0 ]]; do
     --post-script)
       POST_SCRIPT="$2"
       shift 2
-      ;;
-    --backtest-script)
-      BACKTEST_SCRIPT="$2"
-      shift 2
-      ;;
-    --backtest-ingest-script)
-      BACKTEST_INGEST_SCRIPT="$2"
-      shift 2
-      ;;
-    --no-backtest)
-      ENABLE_BACKTEST=0
-      shift
-      ;;
-    --backtest-pools)
-      BACKTEST_POOLS="$2"
-      shift 2
-      ;;
-    --backtest-cost-bps)
-      BACKTEST_COST_BPS="$2"
-      shift 2
-      ;;
-    --backtest-output-root)
-      BACKTEST_OUTPUT_ROOT="$2"
-      shift 2
-      ;;
-    --backtest-use-llm-summarizer)
-      BACKTEST_USE_LLM_SUMMARIZER=1
-      shift
       ;;
     --no-factor-memory)
       USE_FACTOR_MEMORY=0
@@ -277,63 +235,11 @@ format_duration() {
   printf '%02d:%02d:%02d' "$hours" "$minutes" "$seconds"
 }
 
-ingest_completed_backtests() {
-  if [[ "$ENABLE_BACKTEST" -ne 1 ]]; then
-    return 0
-  fi
-
-  local ingest_args=(
-    --backtest-root "$BACKTEST_OUTPUT_ROOT"
-    --memory-root "$MEMORY_ROOT"
-  )
-  if [[ "$BACKTEST_USE_LLM_SUMMARIZER" -eq 1 ]]; then
-    ingest_args+=(--use-llm-summarizer)
-  fi
-  if [[ "$INLINE_REFERENCES" -eq 1 ]]; then
-    ingest_args+=(--inline-references)
-  fi
-
-  "$PYTHON_CMD" "$BACKTEST_INGEST_SCRIPT" "${ingest_args[@]}"
-}
-
-launch_backtest_worker() {
-  local run_id="$1"
-  local run_dir="$2"
-  if [[ "$ENABLE_BACKTEST" -ne 1 ]]; then
-    return 0
-  fi
-
-  local log_path="$run_dir/backtest_worker.log"
-  local pools_args=()
-  local old_ifs="$IFS"
-  IFS=","
-  read -r -a pools_args <<< "$BACKTEST_POOLS"
-  IFS="$old_ifs"
-
-  local backtest_args=(
-    --run-id "$run_id"
-    --data-dir "$DATA_DIR"
-    --factor-pool "$FACTOR_POOL"
-    --output-dir "$BACKTEST_OUTPUT_ROOT"
-    --cost-bps "$BACKTEST_COST_BPS"
-    --pools "${pools_args[@]}"
-  )
-
-  (
-    "$PYTHON_CMD" "$BACKTEST_SCRIPT" "${backtest_args[@]}"
-  ) > "$log_path" 2>&1 &
-  echo $! > "$run_dir/backtest_worker.pid"
-  echo "Started async backtest worker pid=$(cat "$run_dir/backtest_worker.pid") "\
-"log=$log_path pools=$BACKTEST_POOLS"
-}
-
 runs_completed=0
 current_count="$(effective_factor_count)"
 write_loop_state "running" "$runs_completed" "$current_count"
 
 while [[ "$runs_completed" -lt "$MAX_RUNS" ]]; do
-  ingest_completed_backtests
-
   current_count="$(effective_factor_count)"
   if [[ "$current_count" -ge "$TARGET_QUALIFIED_COUNT" ]]; then
     write_loop_state "target_reached" "$runs_completed" "$current_count"
@@ -391,19 +297,10 @@ while [[ "$runs_completed" -lt "$MAX_RUNS" ]]; do
 
   echo "Starting run $run_number/$MAX_RUNS: $run_id"
   status="ok"
-  backtest_worker_pid=""
-  backtest_worker_log=""
   if ! "$PYTHON_CMD" scripts/run_formal_mvp.py "${run_args[@]}"; then
     status="run_failed"
   elif ! "$POST_SCRIPT" "${post_args[@]}"; then
     status="post_failed"
-  fi
-  if [[ "$status" == "ok" ]]; then
-    launch_backtest_worker "$run_id" "$run_dir"
-    if [[ -f "$run_dir/backtest_worker.pid" ]]; then
-      backtest_worker_pid="$(cat "$run_dir/backtest_worker.pid")"
-      backtest_worker_log="$run_dir/backtest_worker.log"
-    fi
   fi
 
   finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -428,10 +325,6 @@ payload = {
     "effective_factor_count_before": int("$before_count"),
     "effective_factor_count_after": int("$after_count"),
     "used_llm_summarizer": bool($use_summarizer),
-    "backtest_enabled": bool($ENABLE_BACKTEST),
-    "backtest_worker_pid": "$backtest_worker_pid" or None,
-    "backtest_worker_log": "$backtest_worker_log" or None,
-    "backtest_pools": "$BACKTEST_POOLS",
 }
 print(json.dumps(payload, sort_keys=True))
 PY
@@ -452,7 +345,6 @@ PY
   fi
 done
 
-ingest_completed_backtests
 current_count="$(effective_factor_count)"
 write_loop_state "max_runs_reached" "$runs_completed" "$current_count"
 total_elapsed_seconds=$(($(date +%s) - LOOP_STARTED_EPOCH))

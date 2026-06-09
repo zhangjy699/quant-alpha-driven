@@ -10,19 +10,19 @@ split:
   test_start: 2023-01-01
   test_end: 2024-12-01
 fitness_gate:
-  qualified_percentile: 0.65
+  qualified_percentile: 0.50
   elite_percentile: 0.80
   promising_parent_min_primary_metrics: 2
   promising_parent_min_composite: 0.0
   qualified_minima:
     ic: 0.005
-    rank_ic: 0.005
-    icir: 0.05
-    rank_icir: 0.05
-    mi: 0.02
-  elite_minima:
-    ic: 0.01
     rank_ic: 0.01
-    icir: 0.1
-    rank_icir: 0.1
+    icir: 0.05
+    rank_icir: 0.08
+    mi: 0.005
+  elite_minima:
+    ic: 0.02
+    rank_ic: 0.03
+    icir: 0.2
+    rank_icir: 0.25
     mi: 0.02

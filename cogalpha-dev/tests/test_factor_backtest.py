@@ -1,8 +1,11 @@
 import json
 
 import pandas as pd
+import pytest
 
 from factor_backtest import load_factor_from_pool, run_factor_backtest
+
+pytest.importorskip("alphalens")
 
 
 def test_factor_backtest_loads_factor_pool_id_and_writes_reports(tmp_path):
@@ -10,31 +13,30 @@ def test_factor_backtest_loads_factor_pool_id_and_writes_reports(tmp_path):
     data_dir = _write_processed_data(tmp_path)
 
     factor_input = load_factor_from_pool(factor_id=7, factor_pool_root=factor_pool)
+    assert factor_input.fitness_direction == -1
     result = run_factor_backtest(
         factor_input=factor_input,
         data_dir=data_dir,
         output_root=tmp_path / "outputs" / "backtests",
-        cost_bps=5.0,
     )
 
     report = json.loads(result.report_path.read_text(encoding="utf-8"))
-    audit = json.loads(result.audit_path.read_text(encoding="utf-8"))
 
     assert result.output_dir.parent == tmp_path / "outputs" / "backtests"
     assert report["factor_id"] == 7
+    assert report["factor_direction"] == -1
+    assert report["engine"] == "alphalens"
+    assert report["primary_view"] == "top_quantile_excess_returns"
     assert report["neutralization"] == {"status": "skipped"}
     assert "rank_ic_mean" in report["summary"]
-    assert "long_short_net_annual_return" in report["summary"]
-    assert audit["factor_id"] == 7
-    assert audit["outcome"] in {"backtest_success", "backtest_failure"}
+    assert "top_quantile_excess_mean_return" in report["summary"]
+    assert "long_short_mean_return" in report["summary"]
+    assert (result.output_dir / "alphalens_factor_data.csv").exists()
     assert (result.output_dir / "daily_ic.csv").exists()
-    assert (result.output_dir / "quantile_returns.csv").exists()
-    assert (result.output_dir / "annual_metrics.csv").exists()
-    assert (result.output_dir / "plots/quantile_cumulative_returns.svg").exists()
-
-    annual = pd.read_csv(result.output_dir / "annual_metrics.csv")
-    assert "top_excess_annual_return" in annual.columns
-    assert set(annual["year"]) == {2021, 2022}
+    assert (result.output_dir / "quantile_excess_returns.csv").exists()
+    assert (result.output_dir / "quantile_raw_returns.csv").exists()
+    assert (result.output_dir / "long_short_returns.csv").exists()
+    assert report["artifacts"]["tear_sheets"]
 
 
 def test_factor_backtest_fails_fast_for_missing_factor_id(tmp_path):
@@ -83,6 +85,7 @@ def _write_factor_pool(tmp_path):
                 "rationale": "Intraday close strength.",
                 "required_columns": ["open", "high", "low", "close", "volume"],
                 "allowed_libraries": ["np", "pd"],
+                "fitness_direction": -1,
                 "metrics": {
                     "ic": 0.01,
                     "rank_ic": 0.01,

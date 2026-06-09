@@ -21,6 +21,7 @@ class FactorBacktestInput:
     run_id: str
     candidate_id: str
     factor_name: str
+    fitness_direction: int
     factor: dict[str, Any]
     candidate: AlphaCandidate
 
@@ -52,6 +53,9 @@ def load_factor_from_pool(
     factor_file = pool_root / str(entry["file"])
     factor = json.loads(factor_file.read_text(encoding="utf-8"))
     factor_name = str(factor.get("factor_name") or entry["factor_name"])
+    fitness_direction = int(factor.get("fitness_direction", 1) or 1)
+    if fitness_direction not in {-1, 1}:
+        fitness_direction = 1
     candidate = AlphaCandidate(
         candidate_id=str(entry["candidate_id"]),
         alpha=AlphaFunction(
@@ -67,6 +71,7 @@ def load_factor_from_pool(
             "factor_pool": str(entry["pool"]),
             "domain_agent": str(entry["domain_agent"]),
             "run_id": str(entry["run_id"]),
+            "fitness_direction": fitness_direction,
         },
     )
     return FactorBacktestInput(
@@ -77,6 +82,7 @@ def load_factor_from_pool(
         run_id=str(entry["run_id"]),
         candidate_id=str(entry["candidate_id"]),
         factor_name=factor_name,
+        fitness_direction=fitness_direction,
         factor=factor,
         candidate=candidate,
     )

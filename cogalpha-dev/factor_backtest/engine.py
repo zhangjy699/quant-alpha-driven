@@ -1,9 +1,8 @@
-"""Cross-sectional factor backtest engine."""
+"""Alphalens-backed cross-sectional factor research engine."""
 
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,19 +12,18 @@ import numpy as np
 import pandas as pd
 
 from cogalpha.config import BaselineExperimentConfig
-from cogalpha.data import compute_forward_returns, normalize_ohlcv_panel, slice_ohlcv_panel
+from cogalpha.data import load_qlib_daily_pv_hdf, normalize_ohlcv_panel, slice_ohlcv_panel
 from cogalpha.execution import execute_alpha_candidate
-from cogalpha.fitness import compute_predictive_metrics
+from factor_backtest.alphalens import run_alphalens_factor_analysis
 from factor_backtest.loader import FactorBacktestInput
 
 
 @dataclass(frozen=True)
 class FactorBacktestResult:
-    """Paths and summary for one independent factor backtest."""
+    """Paths and summary for one independent factor analysis."""
 
     output_dir: Path
     report_path: Path
-    audit_path: Path
     counts: dict[str, int]
 
 
@@ -37,10 +35,9 @@ def run_factor_backtest(
     start_date: str | None = None,
     end_date: str | None = None,
     quantiles: int = 5,
-    cost_bps: float = 10.0,
     neutralization_data: str | Path | None = None,
 ) -> FactorBacktestResult:
-    """Run a compact cross-sectional factor research backtest."""
+    """Run Alphalens factor analysis; no trade simulation is performed."""
 
     if quantiles < 2:
         raise ValueError("quantiles must be at least 2.")
@@ -48,21 +45,16 @@ def run_factor_backtest(
     data_path = Path(data_dir)
     metadata = _read_metadata(data_path)
     config = BaselineExperimentConfig()
-    ohlcv_panel = normalize_ohlcv_panel(pd.read_parquet(data_path / "ohlcv_panel.parquet"))
+    ohlcv_panel = _load_full_ohlcv_panel(data_path)
     if start_date is not None or end_date is not None:
         dates = ohlcv_panel.index.get_level_values("date")
         start = start_date or str(dates.min().date())
         end = end_date or str(dates.max().date())
         ohlcv_panel = slice_ohlcv_panel(ohlcv_panel, start=start, end=end)
 
-    forward_returns = compute_forward_returns(
-        ohlcv_panel,
-        horizon_days=config.horizon_days,
-        price_column=config.return_price_column,
-        trade_delay_days=config.trade_delay_days,
-    )
     raw_factor_values = execute_alpha_candidate(factor_input.candidate, ohlcv_panel)
-    factor_values = raw_factor_values
+    factor_direction = int(factor_input.fitness_direction)
+    factor_values = raw_factor_values * factor_direction
     neutralization = {"status": "skipped"}
     if neutralization_data is not None:
         factor_values = neutralize_factor_values(
@@ -71,44 +63,57 @@ def run_factor_backtest(
         )
         neutralization = {"status": "applied", "file": str(neutralization_data)}
 
-    daily_ic = compute_daily_ic(factor_values, forward_returns)
-    metrics = compute_predictive_metrics(factor_values, forward_returns)
-    quantile_returns, weights = compute_quantile_returns(
-        factor_values,
-        forward_returns,
-        quantiles=quantiles,
-    )
-    turnover = compute_turnover(weights)
-    returns = build_strategy_returns(
-        quantile_returns,
-        turnover=turnover,
-        cost_bps=cost_bps,
-    )
-    annual_metrics = compute_annual_metrics(
-        daily_ic=daily_ic,
-        returns=returns,
-        factor_values=factor_values,
-        forward_returns=forward_returns,
-        horizon_days=config.horizon_days,
-    )
-    summary = build_summary(
-        metrics=metrics.model_dump(mode="python"),
-        returns=returns,
-        daily_ic=daily_ic,
-        annual_metrics=annual_metrics,
-        horizon_days=config.horizon_days,
-    )
-
     output_dir = _backtest_output_dir(Path(output_root), factor_input.factor_id)
     plots_dir = output_dir / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "report.json"
-    audit_path = output_dir / "backtest_audit.json"
 
-    quantile_returns.to_csv(output_dir / "quantile_returns.csv", index_label="date")
-    daily_ic.to_csv(output_dir / "daily_ic.csv", index_label="date")
-    annual_metrics.to_csv(output_dir / "annual_metrics.csv", index=False)
-    write_quantile_svg(quantile_returns, plots_dir / "quantile_cumulative_returns.svg")
+    analysis = run_alphalens_factor_analysis(
+        factor_values=factor_values,
+        ohlcv_panel=ohlcv_panel,
+        price_column=config.return_price_column,
+        horizon_days=config.horizon_days,
+        quantiles=quantiles,
+        plots_dir=plots_dir,
+    )
+    summary = build_alphalens_summary(
+        daily_ic=analysis.daily_ic,
+        quantile_excess_returns=analysis.quantile_excess_returns,
+        long_short_returns=analysis.long_short_returns,
+        quantiles=quantiles,
+    )
+
+    analysis.factor_data.to_csv(output_dir / "alphalens_factor_data.csv")
+    analysis.daily_ic.to_csv(output_dir / "daily_ic.csv", index_label="date")
+    analysis.quantile_excess_returns.to_csv(
+        output_dir / "quantile_excess_returns.csv",
+        index_label="date",
+    )
+    analysis.quantile_raw_returns.to_csv(
+        output_dir / "quantile_raw_returns.csv",
+        index_label="date",
+    )
+    analysis.long_short_returns.to_csv(
+        output_dir / "long_short_returns.csv",
+        index_label="date",
+    )
+    analysis.daily_ic_by_period.to_csv(
+        output_dir / "daily_ic_by_period.csv",
+        index_label="date",
+    )
+    analysis.long_short_returns_by_period.to_csv(
+        output_dir / "long_short_returns_by_period.csv",
+        index_label="date",
+    )
+    quantile_excess_by_period_artifacts: dict[str, str] = {}
+    quantile_raw_by_period_artifacts: dict[str, str] = {}
+    for period_column, returns in analysis.quantile_excess_returns_by_period.items():
+        filename = f"quantile_excess_returns_{_artifact_period_name(period_column)}.csv"
+        returns.to_csv(output_dir / filename, index_label="date")
+        quantile_excess_by_period_artifacts[period_column] = filename
+    for period_column, returns in analysis.quantile_raw_returns_by_period.items():
+        filename = f"quantile_raw_returns_{_artifact_period_name(period_column)}.csv"
+        returns.to_csv(output_dir / filename, index_label="date")
+        quantile_raw_by_period_artifacts[period_column] = filename
 
     report = {
         "factor_id": factor_input.factor_id,
@@ -118,294 +123,71 @@ def run_factor_backtest(
         "pool": factor_input.pool,
         "domain_agent": factor_input.domain_agent,
         "created_at": datetime.now(UTC).isoformat(),
+        "engine": "alphalens",
+        "primary_view": "top_quantile_excess_returns",
+        "auxiliary_view": "top_minus_bottom_long_short_returns",
         "data_dir": str(data_path),
         "data_version": metadata.get("data_version", "unversioned"),
         "start_date": str(ohlcv_panel.index.get_level_values("date").min().date()),
         "end_date": str(ohlcv_panel.index.get_level_values("date").max().date()),
         "horizon_days": config.horizon_days,
+        "period_column": analysis.primary_period_column,
+        "primary_period_column": analysis.primary_period_column,
+        "diagnostic_period_columns": analysis.period_columns,
         "trade_delay_days": config.trade_delay_days,
         "return_price_column": config.return_price_column,
-        "cost_bps": cost_bps,
+        "factor_direction": factor_direction,
         "quantiles": quantiles,
         "neutralization": neutralization,
         "summary": summary,
         "artifacts": {
+            "alphalens_factor_data": "alphalens_factor_data.csv",
             "daily_ic": "daily_ic.csv",
-            "quantile_returns": "quantile_returns.csv",
-            "annual_metrics": "annual_metrics.csv",
-            "quantile_plot": "plots/quantile_cumulative_returns.svg",
-            "backtest_audit": "backtest_audit.json",
+            "quantile_excess_returns": "quantile_excess_returns.csv",
+            "quantile_raw_returns": "quantile_raw_returns.csv",
+            "long_short_returns": "long_short_returns.csv",
+            "daily_ic_by_period": "daily_ic_by_period.csv",
+            "long_short_returns_by_period": "long_short_returns_by_period.csv",
+            "quantile_excess_returns_by_period": quantile_excess_by_period_artifacts,
+            "quantile_raw_returns_by_period": quantile_raw_by_period_artifacts,
+            "tear_sheets": [
+                str(path.relative_to(output_dir))
+                for path in analysis.tear_sheet_paths
+            ],
         },
     }
     _write_json(report_path, report)
-    _write_json(
-        audit_path,
-        build_backtest_audit(
-            report=report,
-            annual_metrics=annual_metrics,
-            factor_input=factor_input,
-        ),
-    )
     return FactorBacktestResult(
         output_dir=output_dir,
         report_path=report_path,
-        audit_path=audit_path,
         counts={
-            "daily_rows": int(len(returns)),
-            "annual_rows": int(len(annual_metrics)),
+            "factor_rows": int(len(analysis.factor_data)),
+            "daily_ic_rows": int(len(analysis.daily_ic)),
+            "diagnostic_periods": int(len(analysis.period_columns)),
             "quantiles": int(quantiles),
+            "tear_sheet_figures": int(len(analysis.tear_sheet_paths)),
         },
     )
 
 
-def compute_daily_ic(
-    factor_values: pd.DataFrame,
-    forward_returns: pd.DataFrame,
-) -> pd.DataFrame:
-    """Return daily IC and RankIC time series."""
-
-    factors, returns = factor_values.align(forward_returns, join="inner", axis=None)
-    records: list[dict[str, Any]] = []
-    for date, factor_row in factors.iterrows():
-        return_row = returns.loc[date]
-        valid = factor_row.notna() & return_row.notna()
-        x = factor_row.loc[valid].astype(float)
-        y = return_row.loc[valid].astype(float)
-        if len(x) < 2 or x.nunique() < 2 or y.nunique() < 2:
-            ic = np.nan
-            rank_ic = np.nan
-        else:
-            ic = float(x.corr(y))
-            rank_ic = float(x.rank(method="average").corr(y.rank(method="average")))
-        records.append(
-            {
-                "date": pd.Timestamp(date),
-                "ic": ic,
-                "rank_ic": rank_ic,
-                "coverage_count": int(valid.sum()),
-                "universe_count": int(return_row.notna().sum()),
-                "coverage": _safe_div(float(valid.sum()), float(return_row.notna().sum())),
-            }
-        )
-    return pd.DataFrame.from_records(records).set_index("date").sort_index()
-
-
-def compute_quantile_returns(
-    factor_values: pd.DataFrame,
-    forward_returns: pd.DataFrame,
+def build_alphalens_summary(
     *,
+    daily_ic: pd.DataFrame,
+    quantile_excess_returns: pd.DataFrame,
+    long_short_returns: pd.Series,
     quantiles: int,
-) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
-    """Return quantile forward returns and daily equal-weight portfolio weights."""
-
-    factors, returns = factor_values.align(forward_returns, join="inner", axis=None)
-    quantile_rows: list[dict[str, Any]] = []
-    top_weights: dict[pd.Timestamp, pd.Series] = {}
-    bottom_weights: dict[pd.Timestamp, pd.Series] = {}
-    long_short_weights: dict[pd.Timestamp, pd.Series] = {}
-
-    for date, factor_row in factors.iterrows():
-        return_row = returns.loc[date]
-        valid = factor_row.notna() & return_row.notna()
-        x = factor_row.loc[valid].astype(float)
-        y = return_row.loc[valid].astype(float)
-        row: dict[str, Any] = {"date": pd.Timestamp(date)}
-        if len(x) < quantiles or x.nunique() < quantiles:
-            for index in range(1, quantiles + 1):
-                row[f"q{index}"] = np.nan
-            row["market"] = float(y.mean()) if len(y) else np.nan
-            row["top_excess"] = np.nan
-            row["long_short_gross"] = np.nan
-            quantile_rows.append(row)
-            continue
-
-        labels = pd.qcut(x.rank(method="first"), q=quantiles, labels=False) + 1
-        for index in range(1, quantiles + 1):
-            members = labels[labels == index].index
-            row[f"q{index}"] = float(y.loc[members].mean()) if len(members) else np.nan
-
-        top_assets = labels[labels == quantiles].index
-        bottom_assets = labels[labels == 1].index
-        top_return = row[f"q{quantiles}"]
-        bottom_return = row["q1"]
-        row["market"] = float(y.mean())
-        row["top_excess"] = float(top_return - row["market"])
-        row["long_short_gross"] = float(top_return - bottom_return)
-
-        top = pd.Series(1.0 / len(top_assets), index=top_assets, dtype=float)
-        bottom = pd.Series(1.0 / len(bottom_assets), index=bottom_assets, dtype=float)
-        long_short = top.add(-bottom, fill_value=0.0)
-        top_weights[pd.Timestamp(date)] = top
-        bottom_weights[pd.Timestamp(date)] = bottom
-        long_short_weights[pd.Timestamp(date)] = long_short
-        quantile_rows.append(row)
-
-    return (
-        pd.DataFrame.from_records(quantile_rows).set_index("date").sort_index(),
-        {
-            "top": _weights_to_frame(top_weights),
-            "bottom": _weights_to_frame(bottom_weights),
-            "long_short": _weights_to_frame(long_short_weights),
-        },
-    )
-
-
-def build_strategy_returns(
-    quantile_returns: pd.DataFrame,
-    *,
-    turnover: pd.DataFrame,
-    cost_bps: float,
-) -> pd.DataFrame:
-    """Merge gross returns, turnover, and transaction-cost-adjusted returns."""
-
-    returns = quantile_returns.copy()
-    returns = returns.join(turnover, how="left")
-    returns["long_short_turnover"] = returns["long_short_turnover"].fillna(0.0)
-    returns["transaction_cost"] = returns["long_short_turnover"] * float(cost_bps) / 10000.0
-    returns["long_short_net"] = (
-        returns["long_short_gross"] - returns["transaction_cost"]
-    )
-    return returns
-
-
-def compute_turnover(weights: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Compute one-way turnover for top, bottom, and long-short weights."""
-
-    records: list[dict[str, Any]] = []
-    dates = weights["long_short"].index
-    previous = {name: None for name in weights}
-    for date in dates:
-        row = {"date": pd.Timestamp(date)}
-        for name, frame in weights.items():
-            current = frame.loc[date].dropna()
-            if previous[name] is None:
-                value = 0.0
-            else:
-                aligned_current, aligned_previous = current.align(previous[name], fill_value=0.0)
-                value = 0.5 * float((aligned_current - aligned_previous).abs().sum())
-            row[f"{name}_turnover"] = value
-            previous[name] = current
-        records.append(row)
-    if not records:
-        return pd.DataFrame(
-            columns=["top_turnover", "bottom_turnover", "long_short_turnover"]
-        )
-    return pd.DataFrame.from_records(records).set_index("date").sort_index()
-
-
-def compute_annual_metrics(
-    *,
-    daily_ic: pd.DataFrame,
-    returns: pd.DataFrame,
-    factor_values: pd.DataFrame,
-    forward_returns: pd.DataFrame,
-    horizon_days: int,
-) -> pd.DataFrame:
-    """Return calendar-year stability metrics."""
-
-    records: list[dict[str, Any]] = []
-    for year, frame in returns.groupby(returns.index.year):
-        ic_year = daily_ic.loc[daily_ic.index.year == year]
-        coverage = compute_year_coverage(factor_values, forward_returns, int(year))
-        records.append(
-            {
-                "year": int(year),
-                "ic_mean": _finite_mean(ic_year["ic"]),
-                "rank_ic_mean": _finite_mean(ic_year["rank_ic"]),
-                "top_excess_annual_return": annualize_return(
-                    frame["top_excess"],
-                    horizon_days=horizon_days,
-                ),
-                "long_short_gross_annual_return": annualize_return(
-                    frame["long_short_gross"],
-                    horizon_days=horizon_days,
-                ),
-                "long_short_net_annual_return": annualize_return(
-                    frame["long_short_net"],
-                    horizon_days=horizon_days,
-                ),
-                "max_drawdown": max_drawdown(frame["long_short_net"]),
-                "avg_turnover": _finite_mean(frame["long_short_turnover"]),
-                "avg_coverage": coverage,
-            }
-        )
-    return pd.DataFrame.from_records(records)
-
-
-def build_summary(
-    *,
-    metrics: dict[str, float],
-    returns: pd.DataFrame,
-    daily_ic: pd.DataFrame,
-    annual_metrics: pd.DataFrame,
-    horizon_days: int,
 ) -> dict[str, Any]:
-    """Build compact JSON summary metrics."""
+    """Build a small index for batch reports; Alphalens owns the analysis itself."""
 
+    top_quantile = int(quantiles)
+    top_excess = quantile_excess_returns[top_quantile]
     return {
-        "ic_mean": float(metrics["ic"]),
-        "rank_ic_mean": float(metrics["rank_ic"]),
-        "icir": float(metrics["icir"]),
-        "rank_icir": float(metrics["rank_icir"]),
-        "mi": float(metrics["mi"]),
-        "long_short_gross_annual_return": annualize_return(
-            returns["long_short_gross"],
-            horizon_days=horizon_days,
-        ),
-        "long_short_net_annual_return": annualize_return(
-            returns["long_short_net"],
-            horizon_days=horizon_days,
-        ),
-        "top_excess_annual_return": annualize_return(
-            returns["top_excess"],
-            horizon_days=horizon_days,
-        ),
-        "max_drawdown": max_drawdown(returns["long_short_net"]),
-        "avg_turnover": _finite_mean(returns["long_short_turnover"]),
-        "avg_coverage": _finite_mean(daily_ic["coverage"]),
-        "daily_ic_rows": int(daily_ic["ic"].notna().sum()),
-        "annual_years": [
-            int(year)
-            for year in annual_metrics.get("year", pd.Series(dtype=int)).tolist()
-        ],
-    }
-
-
-def build_backtest_audit(
-    *,
-    report: dict[str, Any],
-    annual_metrics: pd.DataFrame,
-    factor_input: FactorBacktestInput,
-) -> dict[str, Any]:
-    """Build bounded feedback evidence for factor_memory."""
-
-    summary = dict(report["summary"])
-    bottlenecks: list[str] = []
-    if summary["long_short_net_annual_return"] <= 0:
-        bottlenecks.append("long_short_net_annual_return")
-    if summary["rank_ic_mean"] <= 0:
-        bottlenecks.append("rank_ic_mean")
-    if summary["avg_coverage"] < 0.5:
-        bottlenecks.append("coverage")
-    if summary["long_short_net_annual_return"] < summary["long_short_gross_annual_return"] * 0.5:
-        bottlenecks.append("transaction_cost")
-    outcome = "backtest_success" if not bottlenecks else "backtest_failure"
-    return {
-        "audit_id": f"backtest:{factor_input.factor_id}:{report['created_at']}",
-        "created_at": report["created_at"],
-        "factor_id": factor_input.factor_id,
-        "factor_name": factor_input.factor_name,
-        "candidate_id": factor_input.candidate_id,
-        "domain_agent": factor_input.domain_agent,
-        "run_id": factor_input.run_id,
-        "pool": factor_input.pool,
-        "data_version": report["data_version"],
-        "start_date": report["start_date"],
-        "end_date": report["end_date"],
-        "outcome": outcome,
-        "bottlenecks": bottlenecks,
-        "summary": summary,
-        "annual_metrics": _records_for_json(annual_metrics),
+        "rank_ic_mean": _finite_mean(daily_ic["rank_ic"]),
+        "rank_icir": ratio_mean_to_std(daily_ic["rank_ic"], annualize=False),
+        "top_quantile_excess_mean_return": _finite_mean(top_excess),
+        "top_quantile_excess_positive_rate": positive_rate(top_excess),
+        "long_short_mean_return": _finite_mean(long_short_returns),
+        "long_short_positive_rate": positive_rate(long_short_returns),
     }
 
 
@@ -458,103 +240,52 @@ def neutralize_factor_values(
     return pd.DataFrame(neutralized).T.sort_index().sort_index(axis=1)
 
 
-def write_quantile_svg(quantile_returns: pd.DataFrame, path: Path) -> None:
-    """Write a minimal cumulative quantile-return SVG without plotting dependencies."""
-
-    quantile_columns = [column for column in quantile_returns.columns if column.startswith("q")]
-    cumulative = (1.0 + quantile_returns[quantile_columns].fillna(0.0)).cumprod() - 1.0
-    width = 900
-    height = 420
-    margin = 48
-    colors = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0891b2"]
-    values = cumulative.to_numpy(dtype=float)
-    if values.size == 0:
-        min_value, max_value = -0.01, 0.01
-    else:
-        min_value = float(np.nanmin(values))
-        max_value = float(np.nanmax(values))
-        if min_value == max_value:
-            min_value -= 0.01
-            max_value += 0.01
-    x_denominator = max(len(cumulative.index) - 1, 1)
-
-    def point(index: int, value: float) -> tuple[float, float]:
-        x = margin + index * (width - margin * 2) / x_denominator
-        y = height - margin - (value - min_value) * (height - margin * 2) / (
-            max_value - min_value
-        )
-        return x, y
-
-    paths: list[str] = []
-    for idx, column in enumerate(quantile_columns):
-        series = cumulative[column].ffill().fillna(0.0)
-        coords = [point(i, float(value)) for i, value in enumerate(series)]
-        if not coords:
-            continue
-        d = " ".join(
-            f"{'M' if i == 0 else 'L'} {x:.2f} {y:.2f}"
-            for i, (x, y) in enumerate(coords)
-        )
-        color = colors[idx % len(colors)]
-        paths.append(f'<path d="{d}" fill="none" stroke="{color}" stroke-width="2"/>')
-        paths.append(
-            f'<text x="{width - margin + 8}" y="{margin + idx * 18}" '
-            f'font-size="12" fill="{color}">{column}</text>'
-        )
-
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-        f'viewBox="0 0 {width} {height}">'
-        '<rect width="100%" height="100%" fill="white"/>'
-        f'<line x1="{margin}" y1="{height - margin}" x2="{width - margin}" '
-        f'y2="{height - margin}" stroke="#111827" stroke-width="1"/>'
-        f'<line x1="{margin}" y1="{margin}" x2="{margin}" y2="{height - margin}" '
-        f'stroke="#111827" stroke-width="1"/>'
-        '<text x="48" y="24" font-size="16" fill="#111827">'
-        'Quantile cumulative returns</text>'
-        + "".join(paths)
-        + "</svg>"
-    )
-    path.write_text(svg, encoding="utf-8")
-
-
-def annualize_return(values: pd.Series, *, horizon_days: int) -> float:
+def ratio_mean_to_std(
+    values: pd.Series,
+    *,
+    annualize: bool = True,
+) -> float:
     finite = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if finite.empty:
         return 0.0
-    periods_per_year = 252.0 / float(horizon_days)
-    mean_return = float(finite.mean())
-    return float((1.0 + mean_return) ** periods_per_year - 1.0)
+    std = float(finite.std(ddof=0))
+    if std == 0.0:
+        return 0.0
+    return float(finite.mean()) / std
 
 
-def max_drawdown(values: pd.Series) -> float:
-    finite = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+def positive_rate(values: pd.Series) -> float:
+    finite = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if finite.empty:
         return 0.0
-    equity = (1.0 + finite).cumprod()
-    peak = equity.cummax()
-    drawdown = equity / peak - 1.0
-    return float(drawdown.min())
+    return float((finite > 0).mean())
 
 
-def compute_year_coverage(
-    factor_values: pd.DataFrame,
-    forward_returns: pd.DataFrame,
-    year: int,
-) -> float:
-    factors, returns = factor_values.align(forward_returns, join="inner", axis=None)
-    mask = factors.index.year == year
-    if not mask.any():
-        return 0.0
-    valid = factors.loc[mask].notna() & returns.loc[mask].notna()
-    universe = returns.loc[mask].notna()
-    return _safe_div(float(valid.sum().sum()), float(universe.sum().sum()))
+def _artifact_period_name(period_column: str) -> str:
+    return "".join(
+        character if character.isalnum() else "_"
+        for character in str(period_column)
+    ).strip("_")
 
 
-def _weights_to_frame(weights: dict[pd.Timestamp, pd.Series]) -> pd.DataFrame:
-    if not weights:
-        return pd.DataFrame()
-    return pd.DataFrame(weights).T.sort_index().sort_index(axis=1)
+def _load_full_ohlcv_panel(data_dir: Path) -> pd.DataFrame:
+    full_path = data_dir / "ohlcv_panel.parquet"
+    try:
+        return normalize_ohlcv_panel(pd.read_parquet(full_path))
+    except OSError:
+        split_frames = []
+        for split_name in ("train", "valid", "test"):
+            split_path = data_dir / f"{split_name}_ohlcv.parquet"
+            if split_path.exists():
+                try:
+                    split_frames.append(pd.read_parquet(split_path))
+                except OSError:
+                    split_frames = []
+                    break
+        if not split_frames:
+            raw_path = data_dir.parents[1] / "raw" / data_dir.name / "daily_pv.h5"
+            return load_qlib_daily_pv_hdf(raw_path)
+        return normalize_ohlcv_panel(pd.concat(split_frames, ignore_index=True))
 
 
 def _finite_mean(values: pd.Series) -> float:
@@ -562,16 +293,6 @@ def _finite_mean(values: pd.Series) -> float:
     if finite.empty:
         return 0.0
     return float(finite.mean())
-
-
-def _safe_div(numerator: float, denominator: float) -> float:
-    if denominator == 0 or not math.isfinite(denominator):
-        return 0.0
-    return float(numerator / denominator)
-
-
-def _records_for_json(frame: pd.DataFrame) -> list[dict[str, Any]]:
-    return json.loads(frame.replace([np.inf, -np.inf], np.nan).to_json(orient="records"))
 
 
 def _read_metadata(data_dir: Path) -> dict[str, Any]:

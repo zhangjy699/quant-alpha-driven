@@ -233,6 +233,7 @@ class CandidateEvaluationResult(BaseModel):
 
     candidate_id: str = Field(..., min_length=1)
     metrics: FitnessMetrics | None = None
+    raw_metrics: FitnessMetrics | None = None
     guard_report: GuardReport | None = None
     error: str | None = None
     cache_hit: bool = False

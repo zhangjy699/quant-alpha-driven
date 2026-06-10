@@ -73,6 +73,7 @@ def run_factor_backtest(
         ohlcv_panel=ohlcv_panel,
         price_column=config.return_price_column,
         horizon_days=config.horizon_days,
+        trade_delay_days=config.trade_delay_days,
         quantiles=quantiles,
         plots_dir=plots_dir,
         analysis_periods=analysis_periods,

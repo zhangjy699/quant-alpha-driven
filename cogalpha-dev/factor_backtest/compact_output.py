@@ -117,10 +117,14 @@ def clear_output_dir(output_dir: Path) -> None:
 
 
 def discover_batches(*, input_dir: Path) -> list[Path]:
-    if (input_dir / "factors").is_dir():
+    if (input_dir / "factors").is_dir() and (input_dir / "factor_summary.csv").exists():
         return [input_dir]
     batches = sorted(
-        [path for path in input_dir.glob("full-factor-pool-*") if (path / "factors").is_dir()],
+        [
+            path
+            for path in input_dir.glob("full-factor-pool-*")
+            if (path / "factors").is_dir() and (path / "factor_summary.csv").exists()
+        ],
         key=lambda path: path.name,
     )
     return batches[-1:] if batches else []

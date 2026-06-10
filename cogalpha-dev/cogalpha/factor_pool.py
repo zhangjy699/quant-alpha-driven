@@ -352,16 +352,26 @@ def _load_factor_pool_index(path: Path) -> dict[str, Any]:
 
 def _index_counts(factors: list[dict[str, Any]]) -> dict[str, Any]:
     by_pool = {pool: 0 for pool in POOL_NAMES}
+    unique_by_pool = {pool: 0 for pool in POOL_NAMES}
     by_domain: dict[str, int] = {}
+    candidates_by_pool: dict[str, set[str]] = {pool: set() for pool in POOL_NAMES}
+    unique_candidates: set[str] = set()
     for entry in factors:
         pool = entry["pool"]
         domain = entry["domain_agent"]
+        candidate_id = str(entry["candidate_id"])
         by_pool[pool] = by_pool.get(pool, 0) + 1
         by_domain[domain] = by_domain.get(domain, 0) + 1
+        candidates_by_pool.setdefault(pool, set()).add(candidate_id)
+        unique_candidates.add(candidate_id)
+    for pool, candidate_ids in candidates_by_pool.items():
+        unique_by_pool[pool] = len(candidate_ids)
     return {
         "total": len(factors),
         "by_pool": by_pool,
         "by_domain_agent": by_domain,
+        "unique_total": len(unique_candidates),
+        "unique_by_pool": unique_by_pool,
     }
 
 

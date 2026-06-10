@@ -65,6 +65,11 @@ def main() -> None:
         pools=set(args.pools),
         factor_id=args.factor_id,
     )
+    factor_records = _selected_factor_record_count(
+        factor_pool_root=Path(args.factor_pool),
+        pools=set(args.pools),
+        factor_id=args.factor_id,
+    )
     completed = _completed_factor_reports(
         output_root,
         start_date=args.start_date,
@@ -140,6 +145,7 @@ def main() -> None:
         "memory_update": "disabled",
         "factor_id_filter": args.factor_id,
         "selection": {
+            "factor_records": factor_records,
             "unique_candidates": len(selected),
             "factor_ids": [int(entry["factor_id"]) for entry in selected],
             "completed_factor_ids": sorted(completed),
@@ -183,6 +189,21 @@ def _selected_factor_entries(
     ):
         selected_by_candidate.setdefault(str(entry["candidate_id"]), entry)
     return sorted(selected_by_candidate.values(), key=lambda item: int(item["factor_id"]))
+
+
+def _selected_factor_record_count(
+    *,
+    factor_pool_root: Path,
+    pools: set[str],
+    factor_id: int | None,
+) -> int:
+    index = json.loads((factor_pool_root / "index.json").read_text(encoding="utf-8"))
+    return sum(
+        1
+        for entry in index.get("factors", [])
+        if str(entry.get("pool")) in pools
+        and (factor_id is None or int(entry.get("factor_id", -1)) == factor_id)
+    )
 
 
 def _completed_factor_reports(
@@ -269,6 +290,8 @@ def _write_markdown_report(path: Path, summary: dict[str, Any]) -> None:
         f"- Quantiles: `{summary['quantiles']}`",
         f"- Analysis periods: `{', '.join(str(period) + 'D' for period in summary['analysis_periods'])}`",
         f"- Memory update: `{summary['memory_update']}`",
+        f"- Selected factor records: `{summary['selection']['factor_records']}`",
+        f"- Unique candidates: `{summary['selection']['unique_candidates']}`",
         f"- Skipped already completed: `{len(summary['skipped'])}`",
         "",
         "## Factors",

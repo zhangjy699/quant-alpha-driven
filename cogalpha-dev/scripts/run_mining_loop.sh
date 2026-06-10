@@ -7,7 +7,7 @@ Usage:
   scripts/run_mining_loop.sh [options] [-- run_formal_mvp.py args]
 
 Options:
-  --target-qualified-count N       Stop when factor_pool has this many elite+qualified factors. Default: 50
+  --target-qualified-count N       Stop when factor_pool has this many unique elite+qualified candidates. Default: 50
   --max-runs N                     Maximum formal runs to launch. Default: 100
   --sleep-seconds N                Pause between runs. Default: 0
   --summarizer-every N             Enable LLM summarizer every N post runs. Default: 1
@@ -187,10 +187,13 @@ if not index_path.exists():
     raise SystemExit
 index = json.loads(index_path.read_text(encoding="utf-8"))
 print(
-    sum(
-        1
-        for entry in index.get("factors", [])
-        if entry.get("pool") in {"elite", "qualified"}
+    len(
+        {
+            str(entry.get("candidate_id"))
+            for entry in index.get("factors", [])
+            if entry.get("pool") in {"elite", "qualified"}
+            and entry.get("candidate_id") is not None
+        }
     )
 )
 PY
@@ -244,7 +247,7 @@ while [[ "$runs_completed" -lt "$MAX_RUNS" ]]; do
   if [[ "$current_count" -ge "$TARGET_QUALIFIED_COUNT" ]]; then
     write_loop_state "target_reached" "$runs_completed" "$current_count"
     total_elapsed_seconds=$(($(date +%s) - LOOP_STARTED_EPOCH))
-    echo "Target reached: effective factor count $current_count >= "\
+    echo "Target reached: unique candidate count $current_count >= "\
 "$TARGET_QUALIFIED_COUNT total_time=$(format_duration "$total_elapsed_seconds")"
     exit 0
   fi
@@ -333,7 +336,7 @@ PY
   echo "Finished run $run_number/$MAX_RUNS: $run_id status=$status "\
 "run_time=$(format_duration "$run_elapsed_seconds") "\
 "total_time=$(format_duration "$total_elapsed_seconds") "\
-"effective_factors=$after_count/$TARGET_QUALIFIED_COUNT"
+"unique_candidates=$after_count/$TARGET_QUALIFIED_COUNT"
 
   if [[ "$status" != "ok" ]]; then
     echo "Stopping loop because $status for $run_id" >&2

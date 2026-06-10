@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from factor_backtest import load_factor_from_pool, run_factor_backtest
+from factor_backtest.alphalens import prices_from_ohlcv_panel
 
 pytest.importorskip("alphalens")
 
@@ -64,6 +65,30 @@ def test_factor_backtest_applies_optional_neutralization(tmp_path):
 
     report = json.loads(result.report_path.read_text(encoding="utf-8"))
     assert report["neutralization"]["status"] == "applied"
+
+
+def test_alphalens_prices_apply_trade_delay_before_forward_returns():
+    dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])
+    index = pd.MultiIndex.from_product([dates, ["a"]], names=["date", "asset"])
+    panel = pd.DataFrame(
+        {
+            "open": [10.0, 11.0, 13.2],
+            "high": [10.0, 11.0, 13.2],
+            "low": [10.0, 11.0, 13.2],
+            "close": [10.0, 11.0, 13.2],
+            "volume": [100.0, 100.0, 100.0],
+        },
+        index=index,
+    )
+
+    prices = prices_from_ohlcv_panel(
+        panel,
+        price_column="open",
+        trade_delay_days=1,
+    )
+
+    assert prices.loc[pd.Timestamp("2024-01-01"), "a"] == 11.0
+    assert prices.loc[pd.Timestamp("2024-01-02"), "a"] == 13.2
 
 
 def _write_factor_pool(tmp_path):

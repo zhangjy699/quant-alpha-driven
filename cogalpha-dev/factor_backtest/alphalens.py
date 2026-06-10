@@ -33,6 +33,7 @@ def run_alphalens_factor_analysis(
     ohlcv_panel: pd.DataFrame,
     price_column: str,
     horizon_days: int,
+    trade_delay_days: int,
     quantiles: int,
     plots_dir: Path,
     analysis_periods: tuple[int, ...] | None = None,
@@ -41,7 +42,11 @@ def run_alphalens_factor_analysis(
 
     al = import_alphalens()
     factor = factor_frame_to_series(factor_values)
-    prices = prices_from_ohlcv_panel(ohlcv_panel, price_column=price_column)
+    prices = prices_from_ohlcv_panel(
+        ohlcv_panel,
+        price_column=price_column,
+        trade_delay_days=trade_delay_days,
+    )
     periods = _analysis_periods(horizon_days, analysis_periods=analysis_periods)
     factor_data = al.utils.get_clean_factor_and_forward_returns(
         factor=factor,
@@ -122,13 +127,18 @@ def prices_from_ohlcv_panel(
     ohlcv_panel: pd.DataFrame,
     *,
     price_column: str,
+    trade_delay_days: int,
 ) -> pd.DataFrame:
     """Convert normalized OHLCV panel to Alphalens prices DataFrame."""
 
+    if trade_delay_days < 0:
+        raise ValueError("trade_delay_days must be non-negative.")
     frame = ohlcv_panel.reset_index()
     prices = frame.pivot(index="date", columns="asset", values=price_column)
     prices.index = pd.to_datetime(prices.index)
     prices.columns = prices.columns.astype(str)
+    if trade_delay_days:
+        prices = prices.shift(-trade_delay_days).dropna(how="all")
     return prices.sort_index().sort_index(axis=1)
 
 

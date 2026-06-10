@@ -13,6 +13,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from cogalpha.config import BaselineExperimentConfig  # noqa: E402
 from factor_backtest import load_factor_from_pool, run_factor_backtest  # noqa: E402
 
 
@@ -40,8 +41,18 @@ def main() -> None:
     parser.add_argument("--start-date", default="2018-01-01")
     parser.add_argument("--end-date", default="2026-12-31")
     parser.add_argument("--quantiles", type=int, default=10)
+    parser.add_argument(
+        "--analysis-periods",
+        nargs="+",
+        type=int,
+        help=(
+            "Optional extra Alphalens horizons. The config horizon is always included "
+            "as the primary period."
+        ),
+    )
     parser.add_argument("--neutralization-data")
     args = parser.parse_args()
+    requested_analysis_periods = _requested_analysis_periods(args.analysis_periods)
 
     output_root = Path(args.output_dir)
     run_id = datetime.now(UTC).strftime("full-factor-pool-%Y%m%d-%H%M%S")
@@ -59,6 +70,7 @@ def main() -> None:
         start_date=args.start_date,
         end_date=args.end_date,
         quantiles=args.quantiles,
+        analysis_periods=requested_analysis_periods,
     )
     results: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -89,6 +101,9 @@ def main() -> None:
             end_date=args.end_date,
             quantiles=args.quantiles,
             neutralization_data=args.neutralization_data,
+            analysis_periods=tuple(args.analysis_periods)
+            if args.analysis_periods is not None
+            else None,
         )
         report = json.loads(result.report_path.read_text(encoding="utf-8"))
         results.append(
@@ -121,6 +136,7 @@ def main() -> None:
         "start_date_requested": args.start_date,
         "end_date_requested": args.end_date,
         "quantiles": args.quantiles,
+        "analysis_periods": requested_analysis_periods,
         "memory_update": "disabled",
         "factor_id_filter": args.factor_id,
         "selection": {
@@ -133,8 +149,8 @@ def main() -> None:
         "results": results,
         "skipped": skipped,
     }
-    _write_json(batch_dir / "batch_report.json", summary)
     _write_summary_csv(batch_dir / "factor_summary.csv", results)
+    _write_json(batch_dir / "batch_report.json", summary)
     _write_markdown_report(batch_dir / "README.md", summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
 
@@ -175,6 +191,7 @@ def _completed_factor_reports(
     start_date: str,
     end_date: str,
     quantiles: int,
+    analysis_periods: list[int],
 ) -> dict[int, Path]:
     """Find completed factor reports for the same requested analysis setup."""
 
@@ -190,6 +207,8 @@ def _completed_factor_reports(
             str(batch.get("start_date_requested")) != start_date
             or str(batch.get("end_date_requested")) != end_date
             or int(batch.get("quantiles", -1)) != int(quantiles)
+            or [int(period) for period in batch.get("analysis_periods", [])]
+            != analysis_periods
         ):
             continue
         batch_dir = batch_report_path.parent
@@ -204,29 +223,40 @@ def _completed_factor_reports(
     return completed
 
 
+def _requested_analysis_periods(extra_periods: list[int] | None) -> list[int]:
+    periods = [int(BaselineExperimentConfig().horizon_days)]
+    if extra_periods is not None:
+        periods.extend(int(period) for period in extra_periods)
+    return list(dict.fromkeys(period for period in periods if period > 0))
+
+
 def _write_summary_csv(path: Path, results: list[dict[str, Any]]) -> None:
+    columns = [
+        "factor_id",
+        "candidate_id",
+        "factor_name",
+        "pool",
+        "domain_agent",
+        "run_id",
+        "start_date",
+        "end_date",
+        "report_path",
+        "tear_sheets",
+        "factor_direction",
+    ]
     rows = []
     for result in results:
         row = {
             key: result[key]
-            for key in (
-                "factor_id",
-                "candidate_id",
-                "factor_name",
-                "pool",
-                "domain_agent",
-                "run_id",
-                "start_date",
-                "end_date",
-                "report_path",
-                "tear_sheets",
-                "factor_direction",
-            )
+            for key in columns
         }
         row["tear_sheets"] = ";".join(result["tear_sheets"])
         row.update(result["summary"])
         rows.append(row)
-    pd.DataFrame(rows).to_csv(path, index=False)
+    if rows:
+        pd.DataFrame(rows).to_csv(path, index=False)
+    else:
+        pd.DataFrame(columns=columns).to_csv(path, index=False)
 
 
 def _write_markdown_report(path: Path, summary: dict[str, Any]) -> None:
@@ -237,6 +267,7 @@ def _write_markdown_report(path: Path, summary: dict[str, Any]) -> None:
         f"- Pools: `{', '.join(summary['pools'])}`",
         f"- Requested window: `{summary['start_date_requested']}` to `{summary['end_date_requested']}`",
         f"- Quantiles: `{summary['quantiles']}`",
+        f"- Analysis periods: `{', '.join(str(period) + 'D' for period in summary['analysis_periods'])}`",
         f"- Memory update: `{summary['memory_update']}`",
         f"- Skipped already completed: `{len(summary['skipped'])}`",
         "",

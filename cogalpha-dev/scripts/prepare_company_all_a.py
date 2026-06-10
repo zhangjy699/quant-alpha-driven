@@ -1,7 +1,7 @@
 """Fetch company All-A data by chunks and write Qlib-style raw files.
 
 
-Only fill the two fetch functions below. The rest of the script:
+Only fill the fetch function below. The rest of the script:
  1. fetches data in monthly/quarterly chunks,
  2. caches each cleaned chunk as parquet,
  3. writes `daily_pv.h5` and `cn_data.zip` for the existing offline prepare step.
@@ -20,29 +20,13 @@ from tq_data_client import DBServer
 import pandas as pd
 
 
-
-def fetch_company_preadjusted_panel(*, start_date: str, end_date: str) -> pd.DataFrame:
-    """Return pre-adjusted OHLC from the company DB.
-
-    Required company columns:
-        trading_date, wind_code, open_price, high_price, low_price, close_price
-    """
-    client = DBServer(host='192.168.1.27',port=30801)
-    params = {
-        'start_date': {start_date},
-        'end_date': {end_date},
-    }
-    url = f'{client.url_root}/tqmain/equity_adj_daily_f'
-    result = client.get_data(params, url=url)
-    return result
-
-
 def fetch_company_quote_panel(*, start_date: str, end_date: str) -> pd.DataFrame:
-    """Return quote/volume/status fields from the company DB.
+    """Return raw quote/volume/status fields from the company DB.
 
 
     Required company columns:
-        trading_date, wind_code, volume
+        trading_date, wind_code, open_price, high_price, low_price, close_price,
+        volume, adj_factor
 
 
     Useful optional columns:
@@ -53,8 +37,8 @@ def fetch_company_quote_panel(*, start_date: str, end_date: str) -> pd.DataFrame
 
     client = DBServer(host='192.168.1.27',port=30801)
     params = {
-        'start_date': {start_date},
-        'end_date': {end_date},
+        'start_date': start_date,
+        'end_date': end_date,
     }
     url = f'{client.url_root}/tqmain/equity_daily'
     result = client.get_data(params, url=url)
@@ -93,11 +77,16 @@ def main() -> None:
        cache_paths.append(cache_path)
 
 
-   data = pd.concat([pd.read_parquet(path) for path in cache_paths], ignore_index=True)
+   output_columns = ["date", "asset", "open", "high", "low", "close", "volume", "adj_factor"]
+   data = pd.concat(
+       [pd.read_parquet(path, columns=output_columns) for path in cache_paths],
+       ignore_index=True,
+   )
    data = data.drop_duplicates(["date", "asset"], keep="last")
    data = data.sort_values(["date", "asset"]).reset_index(drop=True)
    if data.empty:
        raise ValueError("No usable company All-A rows after cleaning.")
+   data = apply_forward_adjusted_prices(data)
 
 
    hdf_path = raw_dir / "daily_pv.h5"
@@ -122,15 +111,9 @@ def fetch_and_clean_chunk(
    end_date: str,
    exclude_st: bool,
 ) -> pd.DataFrame:
-   adjusted = fetch_company_preadjusted_panel(start_date=start_date, end_date=end_date)
    quote = fetch_company_quote_panel(start_date=start_date, end_date=end_date)
-
-
-   adjusted = rename_company_columns(adjusted)
    quote = rename_company_columns(quote)
-   quote = quote.drop(columns=['open', 'high', 'low', 'close'], errors='ignore')
-   data = adjusted.merge(quote, on=["date", "asset"], how="left")
-   return clean_chunk(data, exclude_st=exclude_st)
+   return clean_chunk(quote, exclude_st=exclude_st)
 
 
 
@@ -159,7 +142,7 @@ def rename_company_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_chunk(data: pd.DataFrame, *, exclude_st: bool) -> pd.DataFrame:
-   required = ["date", "asset", "open", "high", "low", "close", "volume"]
+   required = ["date", "asset", "open", "high", "low", "close", "volume", "adj_factor"]
    missing = [column for column in required if column not in data]
    if missing:
        raise ValueError(f"Missing required company columns after merge: {missing}")
@@ -183,10 +166,25 @@ def clean_chunk(data: pd.DataFrame, *, exclude_st: bool) -> pd.DataFrame:
        frame = frame.loc[~truthy(frame["is_st"])]
 
 
-   for column in ("open", "high", "low", "close", "volume"):
+   for column in ("open", "high", "low", "close", "volume", "adj_factor"):
        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-   frame = frame.dropna(subset=["open", "high", "low", "close", "volume"])
+   frame = frame.dropna(subset=["open", "high", "low", "close", "volume", "adj_factor"])
+   frame = frame.loc[frame["adj_factor"] > 0]
    return frame.loc[frame["volume"] > 0].reset_index(drop=True)
+
+
+def apply_forward_adjusted_prices(frame: pd.DataFrame) -> pd.DataFrame:
+   """Use raw OHLC and adj_factor to generate build-window anchored pre-adjusted OHLC."""
+
+   adjusted = frame.sort_values(["asset", "date"]).copy()
+   anchor_factor = adjusted.groupby("asset")["adj_factor"].transform("last")
+   ratio = adjusted["adj_factor"] / anchor_factor
+   for column in ("open", "high", "low", "close"):
+       raw_column = f"raw_{column}"
+       adjusted[raw_column] = adjusted[column]
+       adjusted[column] = adjusted[column] * ratio
+   adjusted["price_adjustment_ratio"] = ratio
+   return adjusted
 
 
 
@@ -240,6 +238,9 @@ def write_manifest(
        "chunk": args.chunk,
        "exclude_st": args.exclude_st,
        "cache_paths": [str(path) for path in cache_paths],
+       "price_source": "tqmain/equity_daily",
+       "price_adjustment": "locally_forward_adjusted_from_raw_ohlc_and_adj_factor",
+       "price_adjustment_anchor": "last_available_adj_factor_per_asset_in_build_window",
        "daily_pv_hdf": str(hdf_path),
        "universe_zip": str(universe_path),
        "universe_file": "cn_data/instruments/all_a.txt",

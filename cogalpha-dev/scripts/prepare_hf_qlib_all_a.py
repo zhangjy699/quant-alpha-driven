@@ -73,7 +73,8 @@ def main() -> None:
         )
         panel = filter_panel_by_instrument_ranges(panel, universe_ranges)
 
-    dataset = build_baseline_market_data(panel, BaselineExperimentConfig())
+    experiment = BaselineExperimentConfig()
+    dataset = build_baseline_market_data(panel, experiment)
 
     panel_reset = panel.reset_index()
     panel_path = output_dir / "ohlcv_panel.parquet"
@@ -106,12 +107,12 @@ def main() -> None:
         "source_repo_sha": source_sha,
         "source_filename": args.filename,
         "horizon_days": dataset.horizon_days,
-        "return_price_column": BaselineExperimentConfig().return_price_column,
-        "trade_delay_days": BaselineExperimentConfig().trade_delay_days,
+        "return_price_column": experiment.return_price_column,
+        "trade_delay_days": experiment.trade_delay_days,
         "drop_index_instruments": not args.keep_index_instruments,
         "universe_file": None if args.skip_universe_filter else args.universe_file,
-        "split": BaselineExperimentConfig().split.model_dump(mode="json"),
-        "fitness_gate": BaselineExperimentConfig().fitness_gate.model_dump(mode="json"),
+        "split": experiment.split.model_dump(mode="json"),
+        "fitness_gate": experiment.fitness_gate.model_dump(mode="json"),
     }
     data_version = hashlib.sha256(
         json.dumps(data_version_payload, sort_keys=True).encode("utf-8")
@@ -126,22 +127,34 @@ def main() -> None:
         "data_version_payload": data_version_payload,
         "dataset": dataset.dataset,
         "horizon_days": dataset.horizon_days,
-        "return_price_column": BaselineExperimentConfig().return_price_column,
-        "trade_delay_days": BaselineExperimentConfig().trade_delay_days,
+        "return_price_column": experiment.return_price_column,
+        "trade_delay_days": experiment.trade_delay_days,
         "paper_settings": {
-            "dataset": "CSI300",
+            "dataset": experiment.dataset,
             "frequency": "daily",
             "input_columns": ["open", "high", "low", "close", "volume"],
-            "target": "10-day forward return with buying and selling at open price",
-            "return_price_column": "open",
-            "trade_delay_days": 1,
+            "target": (
+                f"{experiment.horizon_days}-day forward return with buying and selling "
+                f"at {experiment.return_price_column} price"
+            ),
+            "return_price_column": experiment.return_price_column,
+            "trade_delay_days": experiment.trade_delay_days,
             "timing_contract": (
                 "AlphaCandidate observes date t daily OHLCV, enters at the next open, "
-                "and exits after 10 trading opens."
+                f"and exits after {experiment.horizon_days} trading open."
             ),
-            "train": ["2018-01-01", "2021-12-31"],
-            "valid": ["2022-01-01", "2022-12-31"],
-            "test": ["2023-01-01", "2026-06-01"],
+            "train": [
+                str(experiment.split.train_start),
+                str(experiment.split.train_end),
+            ],
+            "valid": [
+                str(experiment.split.valid_start),
+                str(experiment.split.valid_end),
+            ],
+            "test": [
+                str(experiment.split.test_start),
+                str(experiment.split.test_end),
+            ],
             "fitness_gate": {
                 "qualified_percentile": 0.65,
                 "elite_percentile": 0.80,

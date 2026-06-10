@@ -127,8 +127,8 @@ def test_load_prepared_baseline_market_data_reads_processed_parquets(tmp_path):
 
     dataset = load_prepared_baseline_market_data(tmp_path)
 
-    assert dataset.dataset == "CSI300"
-    assert dataset.horizon_days == 10
+    assert dataset.dataset == "company_all_a"
+    assert dataset.horizon_days == 1
     assert dataset.train.ohlcv_panel.index.names == ["date", "asset"]
     assert dataset.valid.forward_returns.equals(returns)
 

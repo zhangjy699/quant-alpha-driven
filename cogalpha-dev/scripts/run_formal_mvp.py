@@ -339,7 +339,7 @@ def _build_formal_run_report(
                 name="data_contract",
                 status=StopGoDecision.GO,
                 summary=(
-                    "Prepared market-data split uses 10-day next-open forward returns and recorded "
+                    "Prepared market-data split uses configured next-open forward returns and recorded "
                     "data_version."
                 ),
                 artifacts=[str(manifest_path)],

@@ -31,10 +31,10 @@ class FitnessGateConfig(BaseModel):
     elite_percentile: float = Field(default=0.80, ge=0, le=1)
     qualified_minima: FitnessMetrics = Field(
         default_factory=lambda: FitnessMetrics(
-            ic=0.005,
+            ic=0.01,
             rank_ic=0.01,
-            icir=0.05,
-            rank_icir=0.08,
+            icir=0.1,
+            rank_icir=0.1,
             mi=0.005,
         )
     )
@@ -57,7 +57,7 @@ class BaselineExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dataset: str = "company_all_a"
-    horizon_days: int = 3
+    horizon_days: int = 1
     return_price_column: OHLCVColumn = "open"
     trade_delay_days: int = Field(default=1, ge=0)
     split: SplitConfig = Field(default_factory=SplitConfig)

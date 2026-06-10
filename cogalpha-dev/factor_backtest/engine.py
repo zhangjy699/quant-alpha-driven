@@ -36,6 +36,7 @@ def run_factor_backtest(
     end_date: str | None = None,
     quantiles: int = 5,
     neutralization_data: str | Path | None = None,
+    analysis_periods: tuple[int, ...] | None = None,
 ) -> FactorBacktestResult:
     """Run Alphalens factor analysis; no trade simulation is performed."""
 
@@ -74,6 +75,7 @@ def run_factor_backtest(
         horizon_days=config.horizon_days,
         quantiles=quantiles,
         plots_dir=plots_dir,
+        analysis_periods=analysis_periods,
     )
     summary = build_alphalens_summary(
         daily_ic=analysis.daily_ic,
@@ -133,6 +135,9 @@ def run_factor_backtest(
         "horizon_days": config.horizon_days,
         "period_column": analysis.primary_period_column,
         "primary_period_column": analysis.primary_period_column,
+        "analysis_periods_requested": list(analysis_periods)
+        if analysis_periods is not None
+        else None,
         "diagnostic_period_columns": analysis.period_columns,
         "trade_delay_days": config.trade_delay_days,
         "return_price_column": config.return_price_column,

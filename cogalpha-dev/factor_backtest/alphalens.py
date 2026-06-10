@@ -35,13 +35,14 @@ def run_alphalens_factor_analysis(
     horizon_days: int,
     quantiles: int,
     plots_dir: Path,
+    analysis_periods: tuple[int, ...] | None = None,
 ) -> AlphalensAnalysis:
     """Run Alphalens directly on adjusted factor values and prices."""
 
     al = import_alphalens()
     factor = factor_frame_to_series(factor_values)
     prices = prices_from_ohlcv_panel(ohlcv_panel, price_column=price_column)
-    periods = _analysis_periods(horizon_days)
+    periods = _analysis_periods(horizon_days, analysis_periods=analysis_periods)
     factor_data = al.utils.get_clean_factor_and_forward_returns(
         factor=factor,
         prices=prices,
@@ -197,8 +198,14 @@ def import_alphalens() -> Any:
     return al
 
 
-def _analysis_periods(horizon_days: int) -> tuple[int, ...]:
-    periods = [1, int(horizon_days)]
+def _analysis_periods(
+    horizon_days: int,
+    *,
+    analysis_periods: tuple[int, ...] | None = None,
+) -> tuple[int, ...]:
+    periods = [int(horizon_days)]
+    if analysis_periods is not None:
+        periods.extend(int(period) for period in analysis_periods)
     return tuple(dict.fromkeys(period for period in periods if period > 0))
 
 

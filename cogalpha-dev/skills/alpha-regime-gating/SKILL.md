@@ -19,6 +19,8 @@ AgentRegimeGating is a level 6 CogAlpha domain agent in the Stability & Regime-G
 - [Trace-Grounded Learning](../references/trace-grounded-learning.md) for evidence_id, reviewer, rollback, and utility boundaries.
 - [Diversified Guidance](../references/diversified-guidance.md) when the runtime provides a guidance mode for diverse generation.
 
+- [Operator Library](../references/operator-library.md) for common operator primitives and safe usage patterns.
+
 ## Workflow
 
 1. Observe the requested skill_name, paper_agent_name, level, layer, focus, generation, guidance_mode, and feedback summaries.

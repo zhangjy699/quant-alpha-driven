@@ -19,6 +19,8 @@ Repair an AlphaCandidate that has a viable economic idea but failed deterministi
 - [Trace-Grounded Learning](../references/trace-grounded-learning.md) for evidence_id, reviewer, rollback, and utility boundaries.
 - [Quality Checking](../references/quality-checking.md) for verdict semantics and review priorities.
 
+- [Operator Library](../references/operator-library.md) for common operator primitives and safe usage patterns.
+
 ## Workflow
 
 1. Observe the candidate id, alpha code, rationale, guard reports, previous quality decisions, repair attempt, and feedback.

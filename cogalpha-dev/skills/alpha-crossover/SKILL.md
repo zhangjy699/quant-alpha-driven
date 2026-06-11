@@ -19,6 +19,8 @@ Alpha Crossover is a Thinking Evolution operator that must fuse complementary qu
 - [Trace-Grounded Learning](../references/trace-grounded-learning.md) for evidence_id, reviewer, rollback, and utility boundaries.
 - [Evolution Contract](../references/evolution-contract.md) for mutation, crossover, and child lineage rules.
 
+- [Operator Library](../references/operator-library.md) for common operator primitives and safe usage patterns.
+
 ## Workflow
 
 1. Observe two parent candidates, parent metrics, feedback summaries, generation, and requested operation.

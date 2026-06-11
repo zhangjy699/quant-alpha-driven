@@ -52,11 +52,26 @@ def write_overall_csv_from_records(
     if not records:
         raise ValueError(f"No compactable factor reports found under {input_dir}.")
     output_dir.mkdir(parents=True, exist_ok=True)
-    clear_output_dir(output_dir)
-    table = pd.DataFrame(records).sort_values(["factor_id"], kind="stable")
     path = output_dir / "overall.csv"
+    new_table = pd.DataFrame(records)
+    table = merge_overall_csv(path, new_table)
     table.to_csv(path, index=False, encoding="utf-8-sig")
     return path
+
+
+def merge_overall_csv(path: Path, new_table: pd.DataFrame) -> pd.DataFrame:
+    """Append compact rows; replace existing rows for the same factor_id."""
+
+    if not path.exists():
+        return new_table
+    existing = pd.read_csv(path)
+    if existing.empty:
+        return new_table
+    if "factor_id" not in existing.columns or "factor_id" not in new_table.columns:
+        return pd.concat([existing, new_table], ignore_index=True)
+    replaced_ids = set(new_table["factor_id"].dropna().tolist())
+    kept = existing[~existing["factor_id"].isin(replaced_ids)]
+    return pd.concat([kept, new_table], ignore_index=True)
 
 
 def compact_backtest_outputs(
@@ -108,12 +123,6 @@ def compact_factor_row(
     }
     record.update(annual_return_columns(top_excess))
     return record
-
-
-def clear_output_dir(output_dir: Path) -> None:
-    for path in output_dir.iterdir():
-        if path.is_file():
-            path.unlink()
 
 
 def discover_batches(*, input_dir: Path) -> list[Path]:

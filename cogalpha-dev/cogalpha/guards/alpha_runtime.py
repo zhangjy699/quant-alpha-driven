@@ -138,4 +138,5 @@ def _membership_mask(
         membership.unstack("asset")
         .reindex(index=factor_values.index, columns=factor_values.columns)
         .fillna(False)
+        .astype(bool)
     )

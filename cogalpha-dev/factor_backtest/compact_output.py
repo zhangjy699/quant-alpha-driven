@@ -221,7 +221,7 @@ def information_coefficient_ratio(ic: pd.Series) -> float:
     std = clean.std(ddof=1)
     if clean.empty or pd.isna(std) or std == 0:
         return float("nan")
-    return float(clean.mean() / std)
+    return float(clean.mean() / std * (TRADING_DAYS_PER_YEAR**0.5))
 
 
 def safe_mean(series: pd.Series) -> float:

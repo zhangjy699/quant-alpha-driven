@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from factor_backtest.compact_output import merge_overall_csv, write_overall_csv_from_records
+from factor_backtest.compact_output import (
+    compact_output_name,
+    merge_overall_csv,
+    write_overall_csv_from_records,
+)
 
 
 def test_merge_overall_csv_creates_file_when_missing(tmp_path: Path) -> None:
@@ -56,3 +60,29 @@ def test_write_overall_csv_replaces_same_factor_id(tmp_path: Path) -> None:
     row_two = table.loc[table["factor_id"] == 2].iloc[0]
     assert row_two["ic"] == 0.05
     assert row_two["icir"] == 0.5
+
+
+def test_write_overall_csv_supports_custom_output_name(tmp_path: Path) -> None:
+    output_dir = tmp_path / "compact"
+    records = [
+        {"factor_id": 1, "ic": 0.03, "icir": 0.3},
+    ]
+
+    path = write_overall_csv_from_records(
+        records,
+        input_dir=tmp_path,
+        output_dir=output_dir,
+        output_name="overall_exclude_st.csv",
+    )
+
+    assert path == output_dir / "overall_exclude_st.csv"
+    assert path.exists()
+    assert not (output_dir / "overall.csv").exists()
+
+
+def test_compact_output_name_defaults_to_exclude_st_when_input_dir_has_suffix() -> None:
+    assert (
+        compact_output_name(Path("outputs/backtests/full-factor-pool_exclude_st"))
+        == "overall_exclude_st.csv"
+    )
+    assert compact_output_name(Path("outputs/backtests/full-factor-pool")) == "overall.csv"

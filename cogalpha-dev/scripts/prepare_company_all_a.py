@@ -60,7 +60,8 @@ def main() -> None:
 
 
    raw_dir = Path(args.raw_dir)
-   cache_dir = raw_dir / "cache"
+   paths = data_variant_paths(raw_dir, exclude_st=args.exclude_st)
+   cache_dir = paths["cache_dir"]
    cache_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -89,11 +90,12 @@ def main() -> None:
    data = apply_forward_adjusted_prices(data)
 
 
-   hdf_path = raw_dir / "daily_pv.h5"
-   universe_path = raw_dir / "cn_data.zip"
+   hdf_path = paths["hdf_path"]
+   universe_path = paths["universe_path"]
    write_qlib_hdf(data, hdf_path)
    write_universe(data, universe_path)
    write_manifest(
+       manifest_path=paths["manifest_path"],
        raw_dir=raw_dir,
        cache_paths=cache_paths,
        data=data,
@@ -114,6 +116,22 @@ def fetch_and_clean_chunk(
    quote = fetch_company_quote_panel(start_date=start_date, end_date=end_date)
    quote = rename_company_columns(quote)
    return clean_chunk(quote, exclude_st=exclude_st)
+
+
+def data_variant_paths(raw_dir: Path, *, exclude_st: bool) -> dict[str, Path]:
+   if exclude_st:
+       return {
+           "cache_dir": raw_dir / "cache_exclude_st",
+           "hdf_path": raw_dir / "daily_pv_exclude_st.h5",
+           "universe_path": raw_dir / "cn_data_exclude_st.zip",
+           "manifest_path": raw_dir / "manifest_exclude_st.json",
+       }
+   return {
+       "cache_dir": raw_dir / "cache",
+       "hdf_path": raw_dir / "daily_pv.h5",
+       "universe_path": raw_dir / "cn_data.zip",
+       "manifest_path": raw_dir / "manifest.json",
+   }
 
 
 
@@ -225,6 +243,7 @@ def write_universe(data: pd.DataFrame, path: Path) -> None:
 
 def write_manifest(
    *,
+   manifest_path: Path,
    raw_dir: Path,
    cache_paths: list[Path],
    data: pd.DataFrame,
@@ -250,7 +269,7 @@ def write_manifest(
        "actual_start": str(data["date"].min().date()),
        "actual_end": str(data["date"].max().date()),
    }
-   (raw_dir / "manifest.json").write_text(
+   manifest_path.write_text(
        json.dumps(manifest, indent=2, sort_keys=True),
        encoding="utf-8",
    )

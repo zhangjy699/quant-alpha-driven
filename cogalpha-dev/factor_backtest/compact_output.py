@@ -20,6 +20,14 @@ def main() -> None:
     )
     parser.add_argument("--input-dir", default=str(BASE_INPUT_DIR))
     parser.add_argument("--output-dir", default=str(BASE_OUTPUT_DIR))
+    parser.add_argument(
+        "--output-name",
+        default=None,
+        help=(
+            "Compact CSV filename. Defaults to overall.csv, or overall_exclude_st.csv "
+            "when --input-dir contains exclude_st."
+        ),
+    )
     parser.add_argument("--period", default="1D")
     args = parser.parse_args()
 
@@ -29,7 +37,12 @@ def main() -> None:
         input_dir=input_dir,
         period=args.period,
     )
-    path = write_overall_csv_from_records(records, input_dir=input_dir, output_dir=output_dir)
+    path = write_overall_csv_from_records(
+        records,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        output_name=args.output_name,
+    )
     print(path)
 
 
@@ -38,9 +51,15 @@ def write_overall_csv(
     input_dir: Path,
     output_dir: Path = BASE_OUTPUT_DIR,
     period: str = "1D",
+    output_name: str | None = None,
 ) -> Path:
     records = compact_backtest_outputs(input_dir=input_dir, period=period)
-    return write_overall_csv_from_records(records, input_dir=input_dir, output_dir=output_dir)
+    return write_overall_csv_from_records(
+        records,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        output_name=output_name,
+    )
 
 
 def write_overall_csv_from_records(
@@ -48,11 +67,12 @@ def write_overall_csv_from_records(
     *,
     input_dir: Path,
     output_dir: Path,
+    output_name: str | None = None,
 ) -> Path:
     if not records:
         raise ValueError(f"No compactable factor reports found under {input_dir}.")
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / "overall.csv"
+    path = output_dir / compact_output_name(input_dir, output_name)
     new_table = pd.DataFrame(records)
     table = merge_overall_csv(path, new_table)
     table.to_csv(path, index=False, encoding="utf-8-sig")
@@ -72,6 +92,14 @@ def merge_overall_csv(path: Path, new_table: pd.DataFrame) -> pd.DataFrame:
     replaced_ids = set(new_table["factor_id"].dropna().tolist())
     kept = existing[~existing["factor_id"].isin(replaced_ids)]
     return pd.concat([kept, new_table], ignore_index=True)
+
+
+def compact_output_name(input_dir: Path, output_name: str | None = None) -> str:
+    if output_name is not None:
+        return output_name
+    if "exclude_st" in str(input_dir):
+        return "overall_exclude_st.csv"
+    return "overall.csv"
 
 
 def compact_backtest_outputs(

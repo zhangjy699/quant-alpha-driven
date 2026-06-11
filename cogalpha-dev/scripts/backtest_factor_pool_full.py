@@ -26,7 +26,14 @@ def main() -> None:
     )
     parser.add_argument("--data-dir", default="data/processed/company_all_a")
     parser.add_argument("--factor-pool", default="outputs/factor_pool")
-    parser.add_argument("--output-dir", default="outputs/backtests/full-factor-pool")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help=(
+            "Backtest output root. Defaults to outputs/backtests/full-factor-pool, "
+            "or outputs/backtests/full-factor-pool_exclude_st when --data-dir contains exclude_st."
+        ),
+    )
     parser.add_argument("--pools", nargs="+", default=["elite", "qualified"])
     parser.add_argument(
         "--factor-id",
@@ -54,7 +61,7 @@ def main() -> None:
     args = parser.parse_args()
     requested_analysis_periods = _requested_analysis_periods(args.analysis_periods)
 
-    output_root = Path(args.output_dir)
+    output_root = default_output_root(args.data_dir, args.output_dir)
     run_id = datetime.now(UTC).strftime("full-factor-pool-%Y%m%d-%H%M%S")
     batch_dir = output_root / run_id
     factor_output_root = batch_dir / "factors"
@@ -136,6 +143,7 @@ def main() -> None:
         "batch_id": run_id,
         "created_at": datetime.now(UTC).isoformat(),
         "data_dir": args.data_dir,
+        "output_dir": str(output_root),
         "factor_pool": args.factor_pool,
         "pools": args.pools,
         "start_date_requested": args.start_date,
@@ -189,6 +197,14 @@ def _selected_factor_entries(
     ):
         selected_by_candidate.setdefault(str(entry["candidate_id"]), entry)
     return sorted(selected_by_candidate.values(), key=lambda item: int(item["factor_id"]))
+
+
+def default_output_root(data_dir: str, output_dir: str | None) -> Path:
+    if output_dir is not None:
+        return Path(output_dir)
+    if "exclude_st" in str(data_dir):
+        return Path("outputs/backtests/full-factor-pool_exclude_st")
+    return Path("outputs/backtests/full-factor-pool")
 
 
 def _selected_factor_record_count(
